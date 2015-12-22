@@ -24,7 +24,7 @@
 #include "protobuf.h"
 #include "images/pagemap.pb-c.h"
 
-static int task_reset_dirty_track(int pid)
+int task_reset_dirty_track(int pid)
 {
 	int ret;
 
@@ -334,7 +334,6 @@ again:
 	 * Step 4 -- clean up
 	 */
 
-	ret = task_reset_dirty_track(ctl->pid.real);
 out_xfer:
 	if (pp_ret == NULL)
 		xfer.close(&xfer);
