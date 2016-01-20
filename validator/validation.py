@@ -1,5 +1,10 @@
 import os
+from resgraph import *
 
+# TODO implement incremental dump validation once
+# resgraph model supports them
+
+# TODO print all addresses and flags in HEX
 
 def get_all_ps_ids(processes):
     pids_list = []

@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 
 import sys
-from validator import *
-
+from resgraph import PsList, PsTree, ErrorList, CriuDumpReader
+from validation import validate
 
 def main():
     dir_path = sys.argv[1]
 
     errors = ErrorList()
-    reader = CriuImgFileReader(dir_path)
+    reader = CriuDumpReader(dir_path)
     processes = PsList(reader, errors)
     pstree = PsTree(processes, errors)
 

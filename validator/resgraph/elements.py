@@ -1,5 +1,14 @@
-from utility import *
+# TODO connect all the elements of resource graph that have common relations
+#      remove connections by indexes in arrays - make model high level and convenient.
+# TODO make explicit set of resource graph nodes. Each node is connected with another
+#      nodes. Mode each node type and its supplementary classes to node type python file.
+# TODO support incremental dumps. We probably need 2 resgraph views: one that hides
+#      the fact that dump is incremental another that 
+# TODO print all addresses and flags in HEX
 
+from classfieldshelpers import *
+from criudumpreader import CriuDumpReader
+from errlist import ErrorList
 
 class PsNode:
     def __init__(self, ps=None, parent=None):
