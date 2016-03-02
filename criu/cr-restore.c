@@ -2150,7 +2150,7 @@ static int prepare_task_entries(void)
 	return 0;
 }
 
-int cr_restore_tasks(void)
+static int __cr_restore_tasks(int * status)
 {
 	int ret = -1;
 
@@ -2182,7 +2182,7 @@ int cr_restore_tasks(void)
 	if (prepare_task_entries() < 0)
 		goto err;
 
-	if (prepare_pstree() < 0)
+	if ((*status = prepare_pstree()) < 0)
 		goto err;
 
 	if (crtools_prepare_shared() < 0)
@@ -2194,6 +2194,16 @@ int cr_restore_tasks(void)
 	ret = restore_root_task(root_item);
 err:
 	cr_plugin_fini(CR_PLUGIN_STAGE__RESTORE, ret);
+	return ret;
+}
+
+int cr_restore_tasks(void){
+	pr_info("Restoring started\n");
+	int status = 0;
+	int ret = 0;
+	while(!status && !ret){
+		ret = __cr_restore_tasks(&status);
+	}
 	return ret;
 }
 

@@ -692,7 +692,7 @@ int dump_task_cgroup(struct pstree_item *item, u32 *cg_id, struct parasite_dump_
 		pr_info("Set %d is criu one\n", cs->id);
 	} else {
 		if (item == root_item) {
-			BUG_ON(root_cgset);
+//			BUG_ON(root_cgset);
 			root_cgset = cs;
 			pr_info("Set %d is root one\n", cs->id);
 		} else
@@ -924,7 +924,7 @@ int dump_cgroups(void)
 	 * to criu. If yes, we should not dump anything.
 	 */
 
-	if (root_cgset == criu_cgset && list_is_singular(&cg_sets)) {
+	if (!opts.dump_cgroup && root_cgset == criu_cgset && list_is_singular(&cg_sets)) {
 		pr_info("All tasks in criu's cgroups. Nothing to dump.\n");
 		return 0;
 	}
@@ -1612,6 +1612,64 @@ int new_cg_root_add(char *controller, char *newroot)
 	o->newroot = newroot;
 	list_add(&o->node, &opts.new_cgroup_roots);
 	return 0;
+}
+
+int get_all_tasks_from_cgroup(char * root_path, pid_t ** pids, int *nr){
+	DIR *dir = NULL;
+	struct dirent *de;
+	char path[PATH_MAX];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s/tasks", root_path);
+	f = fopen(path, "r");
+	if (f == NULL) {
+		pr_perror("Unable to open %s", path);
+		return -1;
+	}
+	while (fgets(path, sizeof(path), f)) {
+		pid_t pid = atoi(path);
+		pid_t * tmp = xrealloc(*pids, (*nr + 1) * sizeof (pid_t));
+		if(!tmp) {
+			fclose(f);
+			goto err;
+		}
+		*pids = tmp;
+		(*pids)[(*nr)++] = pid;
+	}
+	fclose(f);
+
+	dir = opendir(root_path);
+	if (!dir) {
+		pr_perror("Unable to open %s", root_path);
+		goto err_closedir;
+	}
+
+	while ((de = readdir(dir))) {
+		struct stat st;
+
+		if (dir_dots(de))
+			continue;
+
+		sprintf(path, "%s/%s", root_path, de->d_name);
+
+		if (fstatat(dirfd(dir), de->d_name, &st, 0) < 0) {
+			pr_perror("stat of %s failed", path);
+			goto err_closedir;
+		}
+
+		if (!S_ISDIR(st.st_mode))
+			continue;
+
+		if(get_all_tasks_from_cgroup(path, pids, nr) < 0) {
+			goto err_closedir;
+		}
+	}
+	closedir(dir);
+	return 0;
+err_closedir:
+	closedir(dir);
+err:
+	return -1;
 }
 
 struct ns_desc cgroup_ns_desc = NS_DESC_ENTRY(CLONE_NEWCGROUP, "cgroup");

@@ -83,6 +83,31 @@
 
 #include "asm/dump.h"
 
+struct ns_mask_list_entry{
+	unsigned long mask;
+	struct list_head list;
+};
+
+static void free_ns_mask_list(struct list_head * roots_ns){
+	struct ns_mask_list_entry * item;
+	while(!list_empty(roots_ns)){
+		item = list_first_entry(roots_ns, struct ns_mask_list_entry, list);
+		list_del(&item->list);
+		xfree(item);
+	}
+}
+
+#define for_each_root(roots) list_for_each_entry(root_item, roots, sibling)
+
+#define for_each_root_ns_start(item, roots_ns, roots) \
+	item = list_entry((roots_ns)->next, struct ns_mask_list_entry, list); \
+	for_each_root(roots) {\
+		root_ns_mask = item->mask; \
+
+#define for_each_root_ns_end(item) \
+		item = list_entry(item->list.next, struct ns_mask_list_entry, list); \
+	} \
+
 static char loc_buf[PAGE_SIZE];
 
 static void close_vma_file(struct vma_area *vma)
@@ -1600,6 +1625,99 @@ static int cr_dump_finish(int ret)
 	return post_dump_ret ? : (ret != 0);
 }
 
+int cr_dump_finish_cgroup(int ret, struct list_head * roots, struct list_head * roots_ns){
+	int post_dump_ret = 0, pid, status;
+	struct ns_mask_list_entry * item;
+
+	if (disconnect_from_page_server())
+		ret = -1;
+
+	close_cr_imgset(&glob_imgset);
+
+	if (bfd_flush_images())
+		ret = -1;
+
+	cr_plugin_fini(CR_PLUGIN_STAGE__DUMP, ret);
+
+	if (!ret) {
+		/*
+		 * It might be a migration case, where we're asked
+		 * to dump everything, then some script transfer
+		 * image on a new node and we're supposed to kill
+		 * dumpee because it continue running somewhere
+		 * else.
+		 *
+		 * Thus ask user via script if we're to break
+		 * checkpoint.
+		 */
+		post_dump_ret = run_scripts(ACT_POST_DUMP);
+		if (post_dump_ret) {
+			post_dump_ret = WEXITSTATUS(post_dump_ret);
+			pr_info("Post dump script passed with %d\n", post_dump_ret);
+		}
+	}
+
+	/*
+	 * Dump is complete at this stage. To choose what
+	 * to do next we need to consider the following
+	 * scenarios
+	 *
+	 *  - error happened during checkpoint: just clean up
+	 *    everything and continue execution of the dumpee;
+	 *
+	 *  - dump successed but post-dump script returned
+	 *    some ret code: same as in previous scenario --
+	 *    just clean up everything and continue execution,
+	 *    we will return script ret code back to criu caller
+	 *    and it's up to a caller what to do with running instance
+	 *    of the dumpee -- either kill it, or continue running;
+	 *
+	 *  - dump successed but -R option passed, pointing that
+	 *    we're asked to continue execution of the dumpee. It's
+	 *    assumed that a user will use post-dump script to keep
+	 *    consistency of the FS and other resources, we simply
+	 *    start rollback procedure and cleanup everyhting.
+	 */
+	if (ret || post_dump_ret || opts.final_state == TASK_ALIVE) {
+		for_each_root_ns_start(item, roots_ns, roots)
+			network_unlock();
+			delete_link_remaps();
+		for_each_root_ns_end(item)
+	}
+
+	for_each_root_ns_start(item, roots_ns, roots)
+		int next_stage = (ret || post_dump_ret) ?
+				TASK_ALIVE : opts.final_state;
+		pstree_switch_state(root_item, next_stage);
+	for_each_root_ns_end(item);
+
+	pid = wait4(-1	, &status, __WALL, NULL);
+	if (pid > 0) {
+		pr_err("Unexpected child %d\n", pid);
+		BUG();
+	}
+
+	free_ps_forest(roots);
+
+	free_ns_mask_list(roots_ns);
+
+	timing_stop(TIME_FROZEN);
+	free_file_locks();
+	free_link_remaps();
+	free_aufs_branches();
+	free_userns_maps();
+
+	close_service_fd(CR_PROC_FD_OFF);
+
+	if (ret) {
+		pr_err("Dumping FAILED.\n");
+	} else {
+		write_stats(DUMP_STATS);
+		pr_info("Dumping finished successfully\n");
+	}
+	return post_dump_ret ? : (ret != 0);
+}
+
 void dump_alarm_handler(int signum)
 {
 	pr_err("Timeout reached\n");
@@ -1732,4 +1850,157 @@ int cr_dump_tasks(pid_t pid)
 		goto err;
 err:
 	return cr_dump_finish(ret);
+}
+
+
+
+int cr_dump_cgroup(){
+	InventoryEntry he = INVENTORY_ENTRY__INIT;
+
+	LIST_HEAD(roots);
+	LIST_HEAD(roots_ns);
+
+	struct pstree_item *item;
+	struct ns_mask_list_entry * mask_item;
+
+	int pre_dump_ret = 0;
+	int ret = -1;
+
+	pr_info("========================================\n");
+	pr_info("Dumping cgroup (%s)\n", opts.dump_cgroup);
+	pr_info("========================================\n");
+
+	pre_dump_ret = run_scripts(ACT_PRE_DUMP);
+	if (pre_dump_ret != 0) {
+		pr_err("Pre dump script failed with %d!\n", pre_dump_ret);
+		goto err;
+	}
+	if (init_stats(DUMP_STATS))
+		goto err;
+
+	if (cr_plugin_init(CR_PLUGIN_STAGE__DUMP))
+		goto err;
+
+	if (kerndat_init())
+		goto err;
+
+	if (irmap_load_cache())
+		goto err;
+
+	if (cpu_init())
+		goto err;
+
+	if (vdso_init())
+		goto err;
+
+	if (parse_cg_info())
+		goto err;
+
+	if (prepare_inventory(&he))
+		goto err;
+
+	if (opts.cpu_cap & (CPU_CAP_CPU | CPU_CAP_INS)) {
+		if (cpu_dump_cpuinfo())
+			goto err;
+	}
+
+	if (connect_to_page_server())
+		goto err;
+
+	if (setup_alarm_handler(dump_alarm_handler))
+		goto err;
+
+	if(collect_cgroup_trees(&roots))
+		goto err;
+
+	for_each_root(&roots) {
+		root_ns_mask  = 0;
+		if(collect_pstree_ids())
+			goto err;
+		struct ns_mask_list_entry * new = xmalloc(sizeof (struct ns_mask_list_entry));
+		new->mask = root_ns_mask;
+		list_add_tail(&new->list, &roots_ns);
+	}
+
+	for_each_root_ns_start(mask_item, &roots_ns, &roots)
+		if (network_lock())
+			goto err;
+
+		if (collect_file_locks())
+			goto err;
+
+		if (collect_user_namespaces(true) < 0)
+			goto err;
+
+		if (collect_mnt_namespaces(true) < 0)
+			goto err;
+
+		if (collect_net_namespaces(true) < 0)
+			goto err;
+	for_each_root_ns_end(mask_item)
+
+
+
+
+	glob_imgset = cr_glob_imgset_open(O_DUMP);
+	if (!glob_imgset)
+		goto err;
+
+	for_each_root_ns_start(mask_item, &roots_ns, &roots)
+		if (collect_seccomp_filters() < 0)
+			goto err;
+
+		for_each_pstree_item(item) {
+			if (dump_one_task(item))
+				goto err;
+		}
+	for_each_root_ns_end(mask_item)
+
+
+	/* MNT namespaces are dumped after files to save remapped links */
+	if (dump_mnt_namespaces() < 0)
+		goto err;
+
+	if (dump_file_locks())
+		goto err;
+
+	for_each_root_ns_start(mask_item, &roots_ns, &roots)
+		if (dump_verify_tty_sids())
+			goto err;
+		if (dump_zombies())
+			goto err;
+	for_each_root_ns_end(mask_item)
+
+	if (dump_ps_forest(&roots))
+		goto err;
+
+
+	for_each_root_ns_start(mask_item, &roots_ns, &roots)
+		if (root_ns_mask)
+			if (dump_namespaces(root_item, root_ns_mask) < 0)
+				goto err;
+	for_each_root_ns_end(mask_item)
+
+
+	ret = dump_cgroups();
+	if (ret)
+		goto err;
+
+	ret = cr_dump_shmem();
+	if (ret)
+		goto err;
+
+	ret = fix_external_unix_sockets();
+	if (ret)
+		goto err;
+
+	ret = tty_verify_active_pairs();
+	if (ret)
+		goto err;
+
+	ret = write_img_inventory(&he);
+	if (ret)
+		goto err;
+err:
+	return cr_dump_finish_cgroup(ret, &roots, &roots_ns);
 }

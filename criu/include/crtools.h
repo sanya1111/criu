@@ -19,6 +19,7 @@ extern int prepare_inventory(InventoryEntry *he);
 #define LAST_PID_PATH		"sys/kernel/ns_last_pid"
 
 extern int cr_dump_tasks(pid_t pid);
+extern int cr_dump_cgroup();
 extern int cr_pre_dump_tasks(pid_t pid);
 extern int cr_restore_tasks(void);
 extern int convert_to_elf(char *elf_path, int fd_core);

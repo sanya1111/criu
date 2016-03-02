@@ -2,7 +2,9 @@
 #define __CR_SEIZE_H__
 
 extern int collect_pstree(pid_t pid);
+extern int collect_cgroup_trees(struct list_head * cgroup_roots);
 extern void pstree_switch_state(struct pstree_item *root_item, int st);
 extern const char *get_real_freezer_state(void);
+
 
 #endif

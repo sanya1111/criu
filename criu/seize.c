@@ -16,6 +16,7 @@
 #include "seize.h"
 #include "stats.h"
 #include "xmalloc.h"
+#include "cgroup.h"
 #include "util.h"
 
 #define NR_ATTEMPTS 5
@@ -23,6 +24,31 @@
 static const char frozen[]	= "FROZEN";
 static const char freezing[]	= "FREEZING";
 static const char thawed[]	= "THAWED";
+
+/*TODO get this value from /proc/sys/kernel/pid_max and choose struct (array, hash table, balanced tree)
+* instead of it
+*/
+#define MAX_PID 33000
+
+//TODO here may be hash table, or rb tree
+static struct pstree_item * pid_array[MAX_PID];
+
+static void pid_array_clean(){
+	memset(pid_array, 0, sizeof pid_array);
+}
+
+static int pid_array_contains(pid_t pid){
+	return pid_array[pid] != NULL;
+}
+
+static int pid_array_write(struct pstree_item * entry){
+	pid_array[entry->pid.real] = entry;
+	return 0;
+}
+
+static struct pstree_item * pid_array_get(pid_t pid){
+	return pid_array[pid];
+}
 
 static const char *get_freezer_state(int fd)
 {
@@ -355,6 +381,14 @@ static int collect_children(struct pstree_item *item)
 		if (child_collected(item, pid))
 			continue;
 
+		/* Have we already collect this subtree ? */
+		if (pid_array_contains(pid)) {
+			c = pid_array_get(pid);
+			c->parent = item;
+			list_add_tail(&c->sibling, &item->children);
+			continue;
+		}
+
 		nr_inprogress++;
 
 		pr_info("Seized task %d, state %d\n", pid, ret);
@@ -386,6 +420,7 @@ static int collect_children(struct pstree_item *item)
 		c->pid.real = pid;
 		c->parent = item;
 		c->state = ret;
+
 		list_add_tail(&c->sibling, &item->children);
 
 		/* Here is a recursive call (Depth-first search) */
@@ -444,10 +479,16 @@ static void pstree_wait(struct pstree_item *root_item)
 		}
 	}
 
-	pid = wait4(-1, &status, __WALL, NULL);
-	if (pid > 0) {
-		pr_err("Unexpected child %d\n", pid);
-		BUG();
+	if(!opts.dump_cgroup) {
+		/*
+		 * In case cgroup dumping - this check must be done after killing all trees
+		 * - see cr_dump_finish_cgroup()
+		 */
+		pid = wait4(-1	, &status, __WALL, NULL);
+		if (pid > 0) {
+			pr_err("Unexpected child %d\n", pid);
+			BUG();
+		}
 	}
 }
 
@@ -615,6 +656,9 @@ static int collect_task(struct pstree_item *item)
 	if (ret < 0)
 		goto err_close;
 
+	if (pid_array_write(item) < 0)
+		goto err_close;
+
 	/* Depth-first search (DFS) is used for traversing a process tree. */
 	ret = collect_loop(item, collect_children);
 	if (ret < 0)
@@ -684,5 +728,79 @@ err:
 	/* Freezing stage finished in time - disable timer. */
 	alarm(0);
 	return ret;
+}
+
+int collect_cgroup_trees(struct list_head * cgroup_roots)
+{
+	pid_array_clean();
+	pid_t * tasks_pids = NULL;
+	int n_tasks = 0;
+	int ret = -1;
+	int i;
+
+
+
+	if(get_all_tasks_from_cgroup(opts.dump_cgroup, &tasks_pids, &n_tasks) < 0){
+		goto err_free;
+	}
+	pr_info("Cgroup: Collected %d tasks for cgroup %s\n", n_tasks, opts.dump_cgroup);
+
+	for(i = 0; i < n_tasks; i++){
+		pid_t current_task = tasks_pids[i];
+
+		if(pid_array_contains(current_task)) {
+			continue;
+		}
+
+		root_item = alloc_pstree_item();
+		if (root_item == NULL)
+			goto err_free;
+
+		root_item->pid.real = current_task;
+
+		if (seize_catch_task(current_task)) {
+			set_cr_errno(ESRCH);
+			goto err_free;
+		}
+
+		alarm(opts.timeout);
+
+		ret = seize_wait_task(current_task, -1, &dmpi(root_item)->pi_creds);
+		if (ret < 0)
+			goto err_alarm;
+
+		pr_info("Seized task %d, state %d\n", current_task, ret);
+		root_item->state = ret;
+
+		ret = collect_task(root_item);
+		if (ret < 0)
+			goto err_alarm;
+
+		alarm(0);
+	}
+
+	pr_info("Cgroup: seized all tasks from set \n");
+
+	/* Get root tasks */
+	for(i = 0; i < n_tasks; i++){
+		struct pstree_item * task = pid_array_get(tasks_pids[i]);
+		if(!task->parent){
+			pr_info("Cgroup: root pid is %d\n", tasks_pids[i]);
+			list_add_tail(&task->sibling, cgroup_roots);
+			root_item = task;
+		}
+	}
+	if(tasks_pids != NULL){
+		xfree(tasks_pids);
+	}
+	return 0;
+
+err_alarm:
+	alarm(0);
+err_free:
+	if(tasks_pids != NULL){
+		xfree(tasks_pids);
+	}
+	return -1;
 }
 

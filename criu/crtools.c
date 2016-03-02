@@ -274,6 +274,7 @@ int main(int argc, char *argv[], char *envp[])
 		{ "timeout",			required_argument,	0, 1072 },
 		{ "external",			required_argument,	0, 1073	},
 		{ "empty-ns",			required_argument,	0, 1074	},
+		{ "dump-cgroup",        required_argument,  0, 1075 },
 		{ },
 	};
 
@@ -545,6 +546,9 @@ int main(int argc, char *argv[], char *envp[])
 			if (add_external(optarg))
 				return 1;
 			break;
+		case 1075:
+			opts.dump_cgroup = optarg;
+			break;
 		case 1074:
 			if (!strcmp("net", optarg))
 				opts.empty_ns |= CLONE_NEWNET;
@@ -644,8 +648,10 @@ int main(int argc, char *argv[], char *envp[])
 	if (!strcmp(argv[optind], "dump")) {
 		preload_socket_modules();
 
-		if (!tree_id)
+		if (!tree_id && !opts.dump_cgroup)
 			goto opt_pid_missing;
+		if ( opts.dump_cgroup )
+			return cr_dump_cgroup();
 		return cr_dump_tasks(tree_id);
 	}
 

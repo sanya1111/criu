@@ -16,6 +16,7 @@ int prepare_cgroup(void);
 int prepare_cgroup_properties(void);
 int restore_freezer_state(void);
 void fini_cgroup(void);
+int get_all_tasks_from_cgroup(char * root_path, pid_t ** pids, int *nr);
 
 struct cg_controller;
 

@@ -106,6 +106,7 @@ struct cr_options {
 	bool			lsm_supplied;
 	char			*lsm_profile;
 	unsigned int		timeout;
+	char            *dump_cgroup;
 	unsigned int		empty_ns;
 };
 

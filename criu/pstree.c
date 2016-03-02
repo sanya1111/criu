@@ -189,6 +189,35 @@ void free_pstree(struct pstree_item *root_item)
 	}
 }
 
+void free_ps_forest(struct list_head * roots){
+	list_for_each_entry(root_item, roots, sibling){
+		struct pstree_item *item = root_item, *parent;
+		while (item) {
+			if (!list_empty(&item->children)) {
+				item = list_first_entry(&item->children, struct pstree_item, sibling);
+				continue;
+			}
+
+			parent = item->parent;
+			if(item != root_item) {
+				list_del(&item->sibling);
+				pstree_free_cores(item);
+				xfree(item->threads);
+				xfree(item);
+			}
+			item = parent;
+		}
+	}
+
+	while(!list_empty(roots)){
+		struct pstree_item * item = list_first_entry(roots, struct pstree_item, sibling);
+		list_del(&item->sibling);
+		pstree_free_cores(item);
+		xfree(item->threads);
+		xfree(item);
+	}
+}
+
 struct pstree_item *__alloc_pstree_item(bool rst)
 {
 	struct pstree_item *item;
@@ -326,6 +355,69 @@ err:
 	return ret;
 }
 
+int dump_ps_forest(struct list_head *roots){
+	struct pstree_item *item = root_item;
+	PstreeEntry e = PSTREE_ENTRY__INIT;
+	int ret = -1, i;
+	struct cr_img *img;
+
+	pr_info("\n");
+	pr_info("Dumping forest\n");
+	pr_info("----------------------------------------\n");
+
+	/*
+	 * Make sure we're dumping session leader, if not an
+	 * appropriate option must be passed.
+	 *
+	 * Also note that if we're not a session leader we
+	 * can't get the situation where the leader sits somewhere
+	 * deeper in process tree, thus top-level checking for
+	 * leader is enough.
+	 */
+	list_for_each_entry(root_item, roots, sibling)
+		if (root_item->pid.virt != root_item->sid) {
+			if (!opts.shell_job) {
+				pr_err("The root process %d is not a session leader. "
+					   "Consider using --" OPT_SHELL_JOB " option\n", item->pid.virt);
+				return -1;
+			}
+		}
+
+	img = open_image(CR_FD_PSTREE, O_DUMP);
+	if (!img)
+		return -1;
+
+	list_for_each_entry(root_item, roots, sibling)
+		for_each_pstree_item(item) {
+			pr_info("Process: %d(%d)\n", item->pid.virt, item->pid.real);
+
+			e.pid		= item->pid.virt;
+			e.ppid		= item->parent ? item->parent->pid.virt : 0;
+			e.pgid		= item->pgid;
+			e.sid		= item->sid;
+			e.n_threads	= item->nr_threads;
+
+			e.threads = xmalloc(sizeof(e.threads[0]) * e.n_threads);
+			if (!e.threads)
+				goto err;
+
+			for (i = 0; i < item->nr_threads; i++)
+				e.threads[i] = item->threads[i].virt;
+
+			ret = pb_write_one(img, &e, PB_PSTREE);
+			xfree(e.threads);
+
+			if (ret)
+				goto err;
+		}
+	ret = 0;
+
+err:
+	pr_info("----------------------------------------\n");
+	close_image(img);
+	return ret;
+}
+
 static int max_pid = 0;
 
 static int prepare_pstree_for_shell_job(void)
@@ -386,6 +478,11 @@ static int read_pstree_image(void)
 	struct cr_img *img;
 	struct pstree_item *pi, *parent = NULL;
 
+	root_item = NULL;
+
+	static int last_ptr = 0;
+	int ptr = 0;
+
 	pr_info("Reading image tree\n");
 
 	img = open_image(CR_FD_PSTREE, O_RSTR);
@@ -396,8 +493,21 @@ static int read_pstree_image(void)
 		PstreeEntry *e;
 
 		ret = pb_read_one_eof(img, &e, PB_PSTREE);
-		if (ret <= 0)
+		if (ret <= 0) {
+			ret = 1;
 			break;
+		}
+
+		ptr++;
+		if(ptr <= last_ptr){
+			continue;
+		}
+
+		if(e->ppid == 0 && root_item){
+			ret = 0;
+			last_ptr = ptr - 1;
+			break;
+		}
 
 		ret = -1;
 		pi = alloc_pstree_item_with_rst();
@@ -414,13 +524,10 @@ static int read_pstree_image(void)
 		max_pid = max((int)e->sid, max_pid);
 
 		if (e->ppid == 0) {
-			if (root_item) {
-				pr_err("Parent missed on non-root task "
-				       "with pid %d, image corruption!\n", e->pid);
-				goto err;
-			}
+
 			root_item = pi;
 			pi->parent = NULL;
+
 		} else {
 			/*
 			 * Fast path -- if the pstree image is not edited, the
@@ -774,26 +881,29 @@ set_mask:
 int prepare_pstree(void)
 {
 	int ret;
-
 	ret = read_pstree_image();
-	if (!ret)
+
+	if (ret >= 0)
 		/*
 		 * Shell job may inherit sid/pgid from the current
 		 * shell, not from image. Set things up for this.
 		 */
-		ret = prepare_pstree_for_shell_job();
-	if (!ret)
+		if (prepare_pstree_for_shell_job())
+			return -1;
+	if (ret >= 0)
 		/*
 		 * Walk the collected tree and prepare for restoring
 		 * of shared objects at clone time
 		 */
-		ret = prepare_pstree_kobj_ids();
-	if (!ret)
+		if( prepare_pstree_kobj_ids())
+			return -1;
+	if (ret >= 0)
 		/*
 		 * Session/Group leaders might be dead. Need to fix
 		 * pstree with properly injected helper tasks.
 		 */
-		ret = prepare_pstree_ids();
+		if (prepare_pstree_ids())
+			return -1;
 
 	return ret;
 }

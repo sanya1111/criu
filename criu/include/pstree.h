@@ -64,6 +64,7 @@ static inline bool task_alive(struct pstree_item *i)
 }
 
 extern void free_pstree(struct pstree_item *root_item);
+extern void free_ps_forest(struct list_head * roots);
 extern struct pstree_item *__alloc_pstree_item(bool rst);
 #define alloc_pstree_item() __alloc_pstree_item(false)
 #define alloc_pstree_item_with_rst() __alloc_pstree_item(true)
@@ -78,6 +79,7 @@ extern bool restore_before_setsid(struct pstree_item *child);
 extern int prepare_pstree(void);
 
 extern int dump_pstree(struct pstree_item *root_item);
+extern int dump_ps_forest(struct list_head *roots);
 
 struct pstree_item *pstree_item_by_real(pid_t virt);
 struct pstree_item *pstree_item_by_virt(pid_t virt);
