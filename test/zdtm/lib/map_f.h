@@ -60,7 +60,34 @@
 #define KILL_OPERATION(args ... ) \
 	kill_all(args); \
 
-#define FAIL \
+
+
+#define TERM_OPERATION(OUT) { \
+	int i, status; \
+	OUT = 0; \
+	for(i = 0; i < __process_counter; i++){ \
+		pid_t pid = __tasks[i]; \
+		if(pid <= 0) \
+			continue; \
+		int ret = waitpid(pid, &status, WNOHANG); \
+		if(ret == 0) { \
+			kill(pid, SIGTERM); \
+			waitpid(pid, &status, 0); \
+			test_msg("WAITING %d %d\n", pid, ret); \
+		} \
+		if (WIFEXITED(status)) { \
+			if (WEXITSTATUS(status)) { \
+				OUT = 1; \
+				break; \
+			} \
+		} else { \
+			OUT = 1; \
+			break; \
+		} \
+	} \
+} \
+
+#define FAIL  \
 	return 1; \
 
 #define FINISH  \
@@ -76,32 +103,6 @@
 	if(VALUE == NEED) { \
 		FAIL; \
 	} \
-
-#define TERM_OPERATION(OUT) { \
-	int i, status; \
-	OUT = 0; \
-	for(i = 0; i < __process_counter; i++){ \
-		pid_t pid = __tasks[i]; \
-		if(pid <= 0) \
-			continue; \
-		test_msg("WAITING %d\n", pid); \
-		int ret = waitpid(pid, &status, WNOHANG); \
-		if(ret == 0) { \
-			kill(pid, SIGTERM); \
-			wait(&status); \
-		} \
-		if (WIFEXITED(status)) { \
-			if (WEXITSTATUS(status)) { \
-				OUT = 1; \
-				break; \
-			} \
-		} else { \
-			OUT = 1; \
-			break; \
-		} \
-	} \
-	DO_IF(ROOT, test_msg("WAITING COMPL WITH %d\n", OUT)); \
-} \
 
 
 #define CHECK_EQ(PID_VAR, VALUE, NEED) \
