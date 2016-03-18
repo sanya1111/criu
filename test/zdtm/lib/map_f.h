@@ -4,12 +4,18 @@
 
 #define MAX_TASKS 100
 
+#ifdef DEBUG
+#define Test_msg(args...) test_msg(args)
+#else
+#define Test_msg(args...) ;
+#endif
+
 #define INIT(ROOT_PID_VAR) \
 	pid_t ROOT_PID_VAR = 0; \
-	task_waiter_t __task_waiter; \
 	int __futex_id_counter = 1 ;\
-	int __process_counter = 1;\
+	int __process_counter = 0;\
 	pid_t __tasks[MAX_TASKS]; \
+	task_waiter_t __task_waiter; \
 	task_waiter_init(&__task_waiter); \
 
 #define DO_IF(PID_VAR, operation) \
@@ -21,7 +27,7 @@
 	if (PID_VAR == 0) { \
 		operation; \
 		int i = 0; \
-		for(i = 0; i < __process_counter ; i++) \
+		for(i = 0; i < __process_counter  ; i++) \
 			task_waiter_complete(&__task_waiter, __futex_id_counter); \
 	} else { \
 		task_waiter_wait4(&__task_waiter, __futex_id_counter); \
@@ -32,12 +38,10 @@
 	PID_VAR_CHILD = test_fork(); \
 	if(PID_VAR_CHILD == 0) { \
 		int i; \
-		for(i = 0; i < __process_counter; i++) \
+		for(i = 0; i < MAX_TASKS; i++) \
 			__tasks[i] = -2; \
 		PID_VAR_PARENT = -2; \
-	} else { \
-		__tasks[__process_counter - 1] = PID_VAR_CHILD; \
-	} \
+	}
 
 #define MMAP_OPERATION(OUT, args...) \
 	OUT = mmap(args);
@@ -54,7 +58,7 @@
 #define DATACHK_OPERATION(OUT, args...) \
 	OUT = datachk(args);
 
-#define TEST_DEMON_OPERATION \
+#define Test_DEMON_OPERATION \
 	test_daemon(); \
 
 #define KILL_OPERATION(args ... ) \
@@ -69,12 +73,8 @@
 		pid_t pid = __tasks[i]; \
 		if(pid <= 0) \
 			continue; \
-		int ret = waitpid(pid, &status, WNOHANG); \
-		if(ret == 0) { \
-			kill(pid, SIGTERM); \
-			waitpid(pid, &status, 0); \
-			test_msg("WAITING %d %d\n", pid, ret); \
-		} \
+		kill(pid, SIGTERM);\
+		waitpid(pid, &status, 0); \
 		if (WIFEXITED(status)) { \
 			if (WEXITSTATUS(status)) { \
 				OUT = 1; \
@@ -91,7 +91,7 @@
 	return 1; \
 
 #define FINISH  \
-	pass(); \
+	DO_IF(ROOT, pass());\
 	return 0; \
 
 #define CHECK_EQ_OPERATION(VALUE, NEED) \
@@ -106,7 +106,6 @@
 
 
 #define CHECK_EQ(PID_VAR, VALUE, NEED) \
-	DO_IF(CHILD2, test_msg("CHECK_EQ")); \
 	DO_IF(PID_VAR, CHECK_EQ_OPERATION(VALUE, NEED)); \
 
 #define CHECK_NEQ(PID_VAR, VALUE, NOT_NEED) \
@@ -116,9 +115,7 @@
 	pid_t PID_VAR_CHILD = -2; \
 	SYNC(PID_VAR_PARENT, FORK_OPERATION(PID_VAR_PARENT, PID_VAR_CHILD)); \
 	CHECK_NEQ(PID_VAR_PARENT, PID_VAR_CHILD, -1); \
-	if(PID_VAR_CHILD != -2) \
-		test_msg("FORK %d\n", PID_VAR_CHILD); \
-	__tasks[__process_counter - 1] = PID_VAR_CHILD; \
+	__tasks[__process_counter ] = PID_VAR_CHILD; \
 	__process_counter++; \
 
 #define MMAP(PID_VAR, OUT, args...) \
@@ -153,7 +150,7 @@
 	}\
 
 #define CR_START(ROOT) \
-	DO_IF(ROOT, TEST_DEMON_OPERATION); \
+	DO_IF(ROOT, Test_DEMON_OPERATION); \
 	test_waitsig(); \
 	int __temp_result_cr_start = 0;\
 	TERM_OPERATION(__temp_result_cr_start); \
@@ -162,5 +159,4 @@
 
 
 
-
-#endif /* TEST_ZDTM_LIB_MAP_F_H_ */
+#endif /* Test_ZDTM_LIB_MAP_F_H_ */
