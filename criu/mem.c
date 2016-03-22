@@ -24,7 +24,7 @@
 #include "protobuf.h"
 #include "images/pagemap.pb-c.h"
 
-static int task_reset_dirty_track(int pid)
+int task_reset_dirty_track(int pid)
 {
 	int ret;
 
@@ -107,14 +107,14 @@ static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 	return false;
 }
 
-static inline bool page_in_parent(u64 pme)
+bool page_in_parent(unsigned long dirty)
 {
 	/*
 	 * If we do memory tracking, but w/o parent images,
 	 * then we have to dump all memory
 	 */
 
-	return opts.track_mem && opts.img_parent && !(pme & PME_SOFT_DIRTY);
+	return opts.track_mem && opts.img_parent && !dirty;
 }
 
 /*
@@ -150,7 +150,7 @@ static int generate_iovs(struct vma_area *vma, struct page_pipe *pp, u64 *map, u
 		 * page. The latter would be checked in page-xfer.
 		 */
 
-		if (has_parent && page_in_parent(at[pfn])) {
+		if (has_parent && page_in_parent(at[pfn] & PME_SOFT_DIRTY)) {
 			ret = page_pipe_add_hole(pp, vaddr);
 			pages[0]++;
 		} else {
@@ -255,6 +255,7 @@ static int __parasite_dump_pages_seized(struct parasite_ctl *ctl,
 	struct vma_area *vma_area;
 	struct page_xfer xfer = { .parent = NULL };
 	int ret = -1;
+	unsigned long pmc_size;
 
 	pr_info("\n");
 	pr_info("Dumping pages (type: %d pid: %d)\n", CR_FD_PAGES, ctl->pid.real);
@@ -263,14 +264,15 @@ static int __parasite_dump_pages_seized(struct parasite_ctl *ctl,
 	timing_start(TIME_MEMDUMP);
 
 	pr_debug("   Private vmas %lu/%lu pages\n",
-			vma_area_list->longest, vma_area_list->priv_size);
+			vma_area_list->priv_longest, vma_area_list->priv_size);
 
 	/*
 	 * Step 0 -- prepare
 	 */
 
+	pmc_size = max(vma_area_list->priv_longest, vma_area_list->shared_longest);
 	if (pmc_init(&pmc, ctl->pid.real, &vma_area_list->h,
-		     vma_area_list->longest * PAGE_SIZE))
+			 pmc_size * PAGE_SIZE))
 		return -1;
 
 	ret = -1;
@@ -300,22 +302,27 @@ static int __parasite_dump_pages_seized(struct parasite_ctl *ctl,
 		u64 off = 0;
 		u64 *map;
 
-		if (!vma_area_is_private(vma_area, kdat.task_size))
+		if (!vma_area_is_private(vma_area, kdat.task_size) &&
+				!vma_area_is(vma_area, VMA_ANON_SHARED))
 			continue;
 
 		map = pmc_get_map(&pmc, vma_area);
 		if (!map)
 			goto out_xfer;
+		if (vma_area_is(vma_area, VMA_ANON_SHARED))
+			ret = add_shmem_area(ctl->pid.real, vma_area->e, map);
+		else {
 again:
-		ret = generate_iovs(vma_area, pp, map, &off, xfer.parent);
-		if (ret == -EAGAIN) {
-			BUG_ON(pp_ret);
+			ret = generate_iovs(vma_area, pp, map, &off, xfer.parent);
+			if (ret == -EAGAIN) {
+				BUG_ON(pp_ret);
 
-			ret = dump_pages(pp, ctl, args, &xfer);
-			if (ret)
-				goto out_xfer;
-			page_pipe_reinit(pp);
-			goto again;
+				ret = dump_pages(pp, ctl, args, &xfer);
+				if (ret)
+					goto out_xfer;
+				page_pipe_reinit(pp);
+				goto again;
+			}
 		}
 		if (ret < 0)
 			goto out_xfer;
@@ -334,7 +341,6 @@ again:
 	 * Step 4 -- clean up
 	 */
 
-	ret = task_reset_dirty_track(ctl->pid.real);
 out_xfer:
 	if (pp_ret == NULL)
 		xfer.close(&xfer);

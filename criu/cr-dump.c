@@ -126,7 +126,7 @@ int collect_mappings(pid_t pid, struct vm_area_list *vma_area_list)
 	if (ret < 0)
 		goto err;
 
-	pr_info("Collected, longest area occupies %lu pages\n", vma_area_list->longest);
+	pr_info("Collected, longest area occupies %lu pages\n", vma_area_list->priv_longest);
 	pr_info_vma_list(&vma_area_list->h);
 
 	pr_info("----------------------------------------\n");
@@ -459,8 +459,6 @@ static int dump_task_mm(pid_t pid, const struct proc_pid_stat *stat,
 			ret = 0;
 		else if (vma_entry_is(vma, VMA_AREA_SYSVIPC))
 			ret = check_sysvipc_map_dump(pid, vma);
-		else if (vma_entry_is(vma, VMA_ANON_SHARED))
-			ret = add_shmem_area(pid, vma);
 		else if (vma_entry_is(vma, VMA_FILE_PRIVATE) ||
 				vma_entry_is(vma, VMA_FILE_SHARED))
 			ret = dump_filemap(pid, vma_area, imgset);
@@ -1154,6 +1152,10 @@ static int pre_dump_one_task(struct pstree_item *item, struct list_head *ctls)
 	if (ret)
 		goto err_cure;
 
+	ret = task_reset_dirty_track(pid);
+	if (ret)
+		goto err_cure;
+
 	if (parasite_cure_remote(parasite_ctl))
 		pr_err("Can't cure (pid: %d) from parasite\n", pid);
 	list_add_tail(&parasite_ctl->pre_list, ctls);
@@ -1364,6 +1366,10 @@ static int dump_one_task(struct pstree_item *item)
 		goto err;
 	}
 
+	ret = task_reset_dirty_track(pid);
+	if (ret)
+		goto err;
+
 	close_cr_imgset(&cr_imgset);
 	exit_code = 0;
 err:
@@ -1524,6 +1530,10 @@ int cr_pre_dump_tasks(pid_t pid)
 	for_each_pstree_item(item)
 		if (pre_dump_one_task(item, &ctls))
 			goto err;
+
+	ret = cr_dump_shmem();
+	if (ret)
+		goto err;
 
 	if (irmap_predump_prep())
 		goto err;

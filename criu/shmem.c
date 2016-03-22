@@ -12,6 +12,7 @@
 #include "page-xfer.h"
 #include "rst-malloc.h"
 #include "vma.h"
+#include "mem.h"
 #include "config.h"
 #include "syscall-codes.h"
 
@@ -149,15 +150,13 @@ static int shmem_wait_and_open(int pid, struct shmem_info *si)
 
 static int restore_shmem_content(void *addr, struct shmem_info *si)
 {
-	int ret = 0, fd_pg;
+	int ret = 0;
 	struct page_read pr;
-	unsigned long off_real;
 
 	ret = open_page_read(si->shmid, &pr, PR_SHMEM);
 	if (ret <= 0)
 		return -1;
 
-	fd_pg = img_raw_fd(pr.pi);
 	while (1) {
 		unsigned long vaddr;
 		unsigned nr_pages;
@@ -173,20 +172,9 @@ static int restore_shmem_content(void *addr, struct shmem_info *si)
 		if (vaddr + nr_pages * PAGE_SIZE > si->size)
 			break;
 
-		off_real = lseek(fd_pg, 0, SEEK_CUR);
-
-		ret = read(fd_pg, addr + vaddr, nr_pages * PAGE_SIZE);
-		if (ret != nr_pages * PAGE_SIZE) {
-			ret = -1;
+		ret = pr.read_pages(&pr, vaddr, nr_pages, addr + vaddr);
+		if (ret < 0)
 			break;
-		}
-
-		if (opts.auto_dedup) {
-			ret = punch_hole(&pr, off_real, nr_pages * PAGE_SIZE, false);
-			if (ret == -1) {
-				break;
-			}
-		}
 
 		if (pr.put_pagemap)
 			pr.put_pagemap(&pr);
@@ -286,12 +274,63 @@ struct shmem_info_dump {
 	unsigned long	start;
 	unsigned long	end;
 	int		pid;
+	unsigned long	*pdirty_map;
+	unsigned long	*pused_map;
 
 	struct shmem_info_dump *next;
 };
 
 #define SHMEM_HASH_SIZE	32
 static struct shmem_info_dump *shmems_hash[SHMEM_HASH_SIZE];
+
+#define BLOCKS_CNT(size, block_size) (((size) + (block_size) - 1) / (block_size))
+
+static int expand_shmem(struct shmem_info_dump *si, unsigned long new_size)
+{
+	unsigned long nr_pages, nr_map_items, map_size,
+				nr_new_map_items, new_map_size;
+
+	nr_pages = BLOCKS_CNT(si->size, PAGE_SIZE);
+	nr_map_items = BLOCKS_CNT(nr_pages, sizeof(*si->pdirty_map) * 8);
+	map_size = nr_map_items * sizeof(*si->pdirty_map);
+
+	nr_pages = BLOCKS_CNT(new_size, PAGE_SIZE);
+	nr_new_map_items = BLOCKS_CNT(nr_pages, sizeof(*si->pdirty_map) * 8);
+	new_map_size = nr_new_map_items * sizeof(*si->pdirty_map);
+
+	BUG_ON(new_map_size < map_size);
+
+	si->pdirty_map = xrealloc(si->pdirty_map, new_map_size);
+	if (!si->pdirty_map)
+		return -1;
+	memzero(si->pdirty_map + nr_map_items, new_map_size - map_size);
+
+	si->pused_map = xrealloc(si->pused_map, new_map_size);
+	if (!si->pused_map)
+		return -1;
+	memzero(si->pused_map + nr_map_items, new_map_size - map_size);
+
+	si->size = new_size;
+	return 0;
+}
+
+static void update_shmem_pmaps(struct shmem_info_dump *si, u64 *map,
+		unsigned long off)
+{
+	unsigned long p, pcount, poff;
+
+	pcount = BLOCKS_CNT(si->size - off, PAGE_SIZE);
+	poff = BLOCKS_CNT(off, PAGE_SIZE);
+	for (p = 0; p < pcount; ++p) {
+		if (map[p] & PME_SOFT_DIRTY)
+			set_bit(p + poff, si->pdirty_map);
+		if (map[p] & PME_SWAP)
+			set_bit(p + poff, si->pused_map);
+		else if ((map[p] & PME_PRESENT) &&
+				((map[p] & PME_PFRAME_MASK) != kdat.zero_page_pfn))
+			set_bit(p + poff, si->pused_map);
+	}
+}
 
 static struct shmem_info_dump *shmem_find(struct shmem_info_dump **chain,
 		unsigned long shmid)
@@ -305,7 +344,7 @@ static struct shmem_info_dump *shmem_find(struct shmem_info_dump **chain,
 	return NULL;
 }
 
-int add_shmem_area(pid_t pid, VmaEntry *vma)
+int add_shmem_area(pid_t pid, VmaEntry *vma, u64 *map)
 {
 	struct shmem_info_dump *si, **chain;
 	unsigned long size = vma->pgoff + (vma->end - vma->start);
@@ -313,23 +352,30 @@ int add_shmem_area(pid_t pid, VmaEntry *vma)
 	chain = &shmems_hash[vma->shmid % SHMEM_HASH_SIZE];
 	si = shmem_find(chain, vma->shmid);
 	if (si) {
-		if (si->size < size)
-			si->size = size;
+		if (si->size < size) {
+			if (expand_shmem(si, size))
+				return -1;
+		}
+		update_shmem_pmaps(si, map, vma->pgoff);
+
 		return 0;
 	}
 
-	si = xmalloc(sizeof(*si));
+	si = xzalloc(sizeof(*si));
 	if (!si)
 		return -1;
 
 	si->next = *chain;
 	*chain = si;
 
-	si->size = size;
 	si->pid = pid;
 	si->start = vma->start;
 	si->end = vma->end;
 	si->shmid = vma->shmid;
+
+	if (expand_shmem(si, size))
+		return -1;
+	update_shmem_pmaps(si, map, vma->pgoff);
 
 	return 0;
 }
@@ -355,16 +401,10 @@ static int dump_one_shmem(struct shmem_info_dump *si)
 	struct page_pipe *pp;
 	struct page_xfer xfer;
 	int err, ret = -1, fd;
-	unsigned char *map = NULL;
 	void *addr = NULL;
 	unsigned long pfn, nrpages;
 
 	pr_info("Dumping shared memory %ld\n", si->shmid);
-
-	nrpages = (si->size + PAGE_SIZE - 1) / PAGE_SIZE;
-	map = xmalloc(nrpages * sizeof(*map));
-	if (!map)
-		goto err;
 
 	fd = open_proc(si->pid, "map_files/%lx-%lx", si->start, si->end);
 	if (fd < 0)
@@ -378,17 +418,7 @@ static int dump_one_shmem(struct shmem_info_dump *si)
 		goto err;
 	}
 
-	/*
-	 * We can't use pagemap here, because this vma is
-	 * not mapped to us at all, but mincore reports the
-	 * pagecache status of a file, which is correct in
-	 * this case.
-	 */
-
-	err = mincore(addr, si->size, map);
-	if (err)
-		goto err_unmap;
-
+	nrpages = (si->size + PAGE_SIZE - 1) / PAGE_SIZE;
 	iovs = xmalloc(((nrpages + 1) / 2) * sizeof(struct iovec));
 	if (!iovs)
 		goto err_unmap;
@@ -402,10 +432,17 @@ static int dump_one_shmem(struct shmem_info_dump *si)
 		goto err_pp;
 
 	for (pfn = 0; pfn < nrpages; pfn++) {
-		if (!(map[pfn] & PAGE_RSS))
+		unsigned long dirty;
+
+		if (!test_bit(pfn, si->pused_map))
 			continue;
 again:
-		ret = page_pipe_add_page(pp, (unsigned long)addr + pfn * PAGE_SIZE);
+		dirty = test_bit(pfn, si->pdirty_map);
+		if (xfer.parent && page_in_parent(dirty))
+			ret = page_pipe_add_hole(pp, (unsigned long)addr + pfn * PAGE_SIZE);
+		else
+			ret = page_pipe_add_page(pp, (unsigned long)addr + pfn * PAGE_SIZE);
+
 		if (ret == -EAGAIN) {
 			ret = dump_pages(pp, &xfer, addr);
 			if (ret)
@@ -427,7 +464,6 @@ err_iovs:
 err_unmap:
 	munmap(addr,  si->size);
 err:
-	xfree(map);
 	return ret;
 }
 
