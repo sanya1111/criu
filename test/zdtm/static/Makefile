@@ -83,6 +83,7 @@ TST_NOFILE	=				\
 		maps04				\
 		maps05				\
 		maps06				\
+		maps07              \
 		mlock_setuid			\
 		xids00				\
 		groups				\
