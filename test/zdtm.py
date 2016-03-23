@@ -312,10 +312,7 @@ class zdtm_test:
 			self.__freezer.freeze()
 
 	def __pidfile(self):
-		if self.__flavor.ns:
-			return self.__name + '.init.pid'
-		else:
-			return self.__name + '.pid'
+		return self.__name + '.pid'
 
 	def __wait_task_die(self):
 		wait_pid_die(int(self.__pid), self.__name)
@@ -346,12 +343,18 @@ class zdtm_test:
 
 		if self.__flavor.ns:
 			env['ZDTM_NEWNS'] = "1"
-			env['ZDTM_PIDFILE'] = os.path.realpath(self.__name + '.init.pid')
 			env['ZDTM_ROOT'] = self.__flavor.root
+			env['PATH'] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 			if self.__flavor.uns:
 				env['ZDTM_USERNS'] = "1"
 				self.__add_wperms()
+			if os.getenv("GCOV"):
+				criu_dir = os.path.dirname(os.getcwd())
+				criu_dir_r = "%s%s" % (self.__flavor.root, criu_dir)
+
+				env['ZDTM_CRIU'] = os.path.dirname(os.getcwd());
+				subprocess.check_call(["mkdir", "-p", criu_dir_r])
 
 		self.__make_action('pid', env, self.__flavor.root)
 
@@ -359,6 +362,11 @@ class zdtm_test:
 			os.kill(int(self.getpid()), 0)
 		except:
 			raise test_fail_exc("start")
+
+		if not self.static():
+			# Wait less than a second to give the test chance to
+			# move into some semi-random state
+			time.sleep(random.random())
 
 	def kill(self, sig = signal.SIGKILL):
 		self.__freezer.thaw()
@@ -408,7 +416,7 @@ class zdtm_test:
 
 		self.__wait_task_die()
 		self.__pid = 0
-		if force or self.__flavor.ns:
+		if force:
 			os.unlink(self.__pidfile())
 
 	def print_output(self):
@@ -707,6 +715,11 @@ class criu_cli:
 
 		a_opts += [ "--timeout", "10" ]
 
+		criu_dir = os.path.dirname(os.getcwd())
+		if os.getenv("GCOV"):
+			a_opts.append("--ext-mount-map")
+			a_opts.append("%s:zdtm" % criu_dir)
+
 		self.__criu_act(action, opts = a_opts + opts)
 
 		if self.__page_server:
@@ -720,6 +733,10 @@ class criu_cli:
 		r_opts += self.__test.getropts()
 
 		self.__prev_dump_iter = None
+		criu_dir = os.path.dirname(os.getcwd())
+		if os.getenv("GCOV"):
+			r_opts.append("--ext-mount-map")
+			r_opts.append("zdtm:%s" % criu_dir)
 		self.__criu_act("restore", opts = r_opts + ["--restore-detached"])
 
 	@staticmethod
@@ -939,6 +956,8 @@ def do_run_test(tname, tdesc, flavs, opts):
 	for f in flavs:
 		print
 		print_sep("Run %s in %s" % (tname, f))
+		if opts['dry_run']:
+			continue
 		flav = flavors[f](opts)
 		t = tclass(tname, tdesc, flav, fcg)
 		cr_api = criu_cli(opts)
@@ -1006,7 +1025,7 @@ class launcher:
 
 		nd = ('nocr', 'norst', 'pre', 'iters', 'page_server', 'sibling', \
 				'fault', 'keep_img', 'report', 'snaps', 'sat', \
-				'dedup', 'sbs', 'freezecg', 'user')
+				'dedup', 'sbs', 'freezecg', 'user', 'dry_run')
 		arg = repr((name, desc, flavor, { d: self.__opts[d] for d in nd }))
 
 		if self.__use_log:
@@ -1266,6 +1285,24 @@ class group:
 	def size(self):
 		return len(self.__tests)
 
+	# common method to write a "meta" auxiliary script (hook/checkskip)
+	# which will call all tests' scripts in turn
+	def __dump_meta(self, fname, ext):
+		scripts = filter(lambda names: os.access(names[1], os.X_OK),
+		                 map(lambda test: (test, test + ext),
+		                     self.__tests))
+		if scripts:
+			f = open(fname + ext, "w")
+			f.write("#!/bin/sh -e\n")
+
+			for test, script in scripts:
+				f.write("echo 'Running %s for %s'\n" % (ext, test))
+				f.write('%s "$@"\n' % script)
+
+			f.write("echo 'All %s scripts OK'\n" % ext)
+			f.close()
+			os.chmod(fname + ext, 0700)
+
 	def dump(self, fname):
 		f = open(fname, "w")
 		for t in self.__tests:
@@ -1280,6 +1317,9 @@ class group:
 			f.write(repr(self.__desc))
 			f.close()
 
+		# write "meta" .checkskip and .hook scripts
+		self.__dump_meta(fname, '.checkskip')
+		self.__dump_meta(fname, '.hook')
 
 def group_tests(opts):
 	excl = None
@@ -1318,7 +1358,7 @@ def group_tests(opts):
 	suf = opts['name'] or 'group'
 
 	for g in groups:
-		if g.size() == 1: # Not much point in group test for this
+		if maxs > 1 and g.size() == 1: # Not much point in group test for this
 			continue
 
 		fn = os.path.join("groups", "%s.%d" % (suf, nr))
@@ -1387,6 +1427,7 @@ rp.add_argument("--user", help = "Run CRIU as regular user", action = 'store_tru
 
 rp.add_argument("--page-server", help = "Use page server dump", action = 'store_true')
 rp.add_argument("-p", "--parallel", help = "Run test in parallel")
+rp.add_argument("--dry-run", help="Don't run tests, just pretend to", action='store_true')
 
 rp.add_argument("-k", "--keep-img", help = "Whether or not to keep images after test",
 		choices = [ 'always', 'never', 'failed' ], default = 'failed')

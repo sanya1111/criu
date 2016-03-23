@@ -88,7 +88,7 @@ static int irmap_update_stat(struct irmap *i)
 	}
 
 	i->revalidate = false;
-	i->dev = st.st_dev;
+	i->dev = MKKDEV(major(st.st_dev), minor(st.st_dev));
 	i->ino = st.st_ino;
 	if (!S_ISDIR(st.st_mode))
 		i->nr_kids = 0; /* don't irmap_update_dir */
@@ -203,7 +203,7 @@ static int irmap_revalidate(struct irmap *c, struct irmap **p)
 		goto invalid;
 	}
 
-	if (c->dev != st.st_dev)
+	if (c->dev != MKKDEV(major(st.st_dev), minor(st.st_dev)))
 		goto invalid;
 	if (c->ino != st.st_ino)
 		goto invalid;
@@ -228,8 +228,6 @@ char *irmap_lookup(unsigned int s_dev, unsigned long i_ino)
 	int hv;
 	struct irmap_path_opt *o;
 
-	s_dev = kdev_to_odev(s_dev);
-
 	pr_debug("Resolving %x:%lx path\n", s_dev, i_ino);
 
 	/*
@@ -245,10 +243,12 @@ char *irmap_lookup(unsigned int s_dev, unsigned long i_ino)
 	timing_start(TIME_IRMAP_RESOLVE);
 
 	hv = irmap_hashfn(s_dev, i_ino);
-	for (p = &cache[hv]; *p; p = &(*p)->next) {
+	for (p = &cache[hv]; *p; ) {
 		c = *p;
-		if (!(c->dev == s_dev && c->ino == i_ino))
+		if (!(c->dev == s_dev && c->ino == i_ino)) {
+			p = &(*p)->next;
 			continue;
+		}
 
 		if (c->revalidate && irmap_revalidate(c, p))
 			continue;

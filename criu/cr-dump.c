@@ -170,8 +170,8 @@ static int dump_sched_info(int pid, ThreadCoreEntry *tc)
 
 	errno = 0;
 	ret = getpriority(PRIO_PROCESS, pid);
-	if (errno) {
-		pr_perror("Can't get nice for %d", pid);
+	if (ret == -1 && errno) {
+		pr_perror("Can't get nice for %d ret %d", pid, ret);
 		return -1;
 	}
 
@@ -522,7 +522,7 @@ static int get_task_futex_robust_list(pid_t pid, ThreadCoreEntry *info)
 	int ret;
 
 	ret = syscall(SYS_get_robust_list, pid, &head, &len);
-	if (ret == -ENOSYS) {
+	if (ret < 0 && errno == ENOSYS) {
 		/*
 		 * If the kernel says get_robust_list is not implemented, then
 		 * check whether set_robust_list is also not implemented, in
@@ -534,7 +534,8 @@ static int get_task_futex_robust_list(pid_t pid, ThreadCoreEntry *info)
 		 * implemented, in which case it will return -EINVAL because
 		 * len should be greater than zero.
 		 */
-		if (syscall(SYS_set_robust_list, NULL, 0) != -ENOSYS)
+		ret = syscall(SYS_set_robust_list, NULL, 0);
+		if (ret == 0 || (ret < 0 && errno != ENOSYS))
 			goto err;
 
 		head = NULL;
@@ -1418,11 +1419,13 @@ static int cr_pre_dump_finish(struct list_head *ctls, int ret)
 {
 	struct parasite_ctl *ctl, *n;
 
-	pstree_switch_state(root_item,
-			ret ? TASK_ALIVE : opts.final_state);
+	pstree_switch_state(root_item, TASK_ALIVE);
 	free_pstree(root_item);
 
 	timing_stop(TIME_FROZEN);
+
+	if (ret < 0)
+		goto err;
 
 	pr_info("Pre-dumping tasks' memory\n");
 	list_for_each_entry_safe(ctl, n, ctls, pre_list) {
@@ -1432,14 +1435,14 @@ static int cr_pre_dump_finish(struct list_head *ctls, int ret)
 		timing_start(TIME_MEMWRITE);
 		ret = open_page_xfer(&xfer, CR_FD_PAGEMAP, ctl->pid.virt);
 		if (ret < 0)
-			break;
+			goto err;
 
 		ret = page_xfer_dump_pages(&xfer, ctl->mem_pp, 0);
 
 		xfer.close(&xfer);
 
 		if (ret)
-			break;
+			goto err;
 
 		timing_stop(TIME_MEMWRITE);
 
@@ -1448,9 +1451,12 @@ static int cr_pre_dump_finish(struct list_head *ctls, int ret)
 		parasite_cure_local(ctl);
 	}
 
-	if (irmap_predump_run())
+	if (irmap_predump_run()) {
 		ret = -1;
+		goto err;
+	}
 
+err:
 	if (disconnect_from_page_server())
 		ret = -1;
 
@@ -1688,6 +1694,15 @@ int cr_dump_tasks(pid_t pid)
 		if (dump_one_task(item))
 			goto err;
 	}
+
+	/*
+	 * It may happen that a process has completed but its files in
+	 * /proc/PID/ are still open by another process. If the PID has been
+	 * given to some newer thread since then, we may be unable to dump
+	 * all this.
+	 */
+	if (dead_pid_conflict())
+		goto err;
 
 	/* MNT namespaces are dumped after files to save remapped links */
 	if (dump_mnt_namespaces() < 0)
