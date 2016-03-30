@@ -10,8 +10,11 @@
 	result; \
 })
 
-#define munmap_in_task(task_var, munmap_args...) \
-	do_in_task_sync(task_var, munmap(munmap_args));
+#define munmap_in_task(task_var, munmap_args...) { \
+	int result = -1; \
+	do_in_task_sync(task_var, result = munmap(munmap_args)); \
+	assert_in_task(task_var, result == 0); \
+}
 
 #define mremap_in_task(task_var, mremap_args...) ({\
 	void * result = MAP_FAILED; \

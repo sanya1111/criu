@@ -279,7 +279,7 @@ int main(int argc, char ** argv) {
 
 	datagen_in_task(CHILD13, child13_mem1, CHILD13_MEM1_SIZE);
 	/* CRIU START */
-	cr_start;
+	cr_start();
 
 
 
@@ -317,5 +317,5 @@ int main(int argc, char ** argv) {
 	datachk_in_task(CHILD9, child7_mem1, CHILD7_MEM1_SIZE);
 	datachk_in_task(CHILD10, child7_mem1, CHILD7_MEM1_SIZE);
 
-	PASS;
+	pstree_test_pass();
 }

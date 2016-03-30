@@ -45,18 +45,18 @@
 	} \
 	__futex_id_counter++;
 
-#define FAIL  \
+#define pstree_test_fail()  \
 	fail(); \
 	exit(1);
 
-#define PASS  \
+#define pstree_test_pass()  \
 	if (*__saved_root_task_var == __CURRENT_TASK)\
 		pass();\
 	exit(0);
 
 #define __assert(assertion) \
 	if (!(assertion)) { \
-		FAIL; \
+		pstree_test_fail(); \
 	}
 
 #define assert_in_task(task_var, assertion) \
@@ -105,21 +105,21 @@
 #define __test_propagate_sig { \
 	int status; \
 	size_t i; \
-	for ( i = 0; i < __children_tasks_counter; i++) { \
+	for (i = 0; i < __children_tasks_counter; i++) { \
 		pid_t pid = __children_tasks[i]; \
 		kill(pid, SIGTERM);\
 		waitpid(pid, &status, 0); \
 		if (WIFEXITED(status)) { \
 			if (WEXITSTATUS(status)) { \
-				FAIL; \
+				pstree_test_fail(); \
 			} \
 		} else { \
-			FAIL; \
+			pstree_test_fail(); \
 		} \
 	} \
 }
 
-#define cr_start \
+#define cr_start() \
 	if (*__saved_root_task_var == __CURRENT_TASK)\
 		test_daemon(); \
 	test_waitsig(); \
