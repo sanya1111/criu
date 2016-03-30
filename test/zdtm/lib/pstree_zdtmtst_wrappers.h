@@ -1,38 +1,35 @@
-#ifndef TEST_ZDTM_LIB_PSTREE_ZDTMTST_WRAPPERS_H_
-#define TEST_ZDTM_LIB_PSTREE_ZDTMTST_WRAPPERS_H_
+#ifndef PSTREE_ZDTMTST_WRAPPERS_H_
+#define PSTREE_ZDTMTST_WRAPPERS_H_
+
 #include "pstree_zdtmtst.h"
 
-#define MMAP(PID_VAR, OUT, args...) \
-	DO_IN_TASK_SYNC(PID_VAR, OUT = mmap(args)); \
-	ASSERT_IN_TASK(PID_VAR, OUT != MAP_FAILED);
+#define mmap_in_task(task_var, mmap_args...) ({\
+	void * result = MAP_FAILED; \
+	do_in_task_sync(task_var, result = mmap(mmap_args)); \
+	assert_in_task(task_var, result != MAP_FAILED); \
+	result; \
+})
 
-#define MUNMAP(PID_VAR, args...) \
-	DO_IN_TASK_SYNC(PID_VAR, munmap(args););
+#define munmap_in_task(task_var, munmap_args...) \
+	do_in_task_sync(task_var, munmap(munmap_args));
 
-#define MREMAP(PID_VAR, OUT, args...) \
-	DO_IN_TASK_SYNC(PID_VAR, OUT = mremap(args)); \
-	ASSERT_IN_TASK(PID_VAR, OUT != MAP_FAILED);
+#define mremap_in_task(task_var, mremap_args...) ({\
+	void * result = MAP_FAILED; \
+	do_in_task_sync(task_var, result = mremap(mremap_args)); \
+	assert_in_task(task_var, result != MAP_FAILED); \
+	result; \
+})
 
-#define DATAGEN(PID_VAR, args...) \
-	DO_IN_TASK_SYNC(PID_VAR, datagen(args));
-
-#define DATACHK(PID_VAR, OUT, args...) \
-	DO_IN_TASK(PID_VAR, OUT = datachk(args));
-
-#define DATACHK_Z(PID_VAR, CRC, OUT, args...) \
-	CRC = ~0; \
-	DATACHK(PID_VAR, OUT, args, (&CRC));
-
-#define DATAGEN_Z(PID_VAR, CRC, args...) \
-	CRC = ~0;\
-	DATAGEN(PID_VAR, args, (&CRC));
-
-#define DATACHK_Z_CHECK(PID_VAR, CRC, args ...) {\
-	int __temp_result_datachk_z = 0;\
-	DATACHK_Z(PID_VAR, CRC, __temp_result_datachk_z, args);  \
-	ASSERT_IN_TASK(PID_VAR, __temp_result_datachk_z == 0); \
+#define datagen_in_task(task_var, datagen_args...) { \
+	uint32_t __crc = ~0; \
+	do_in_task_sync(task_var, datagen(datagen_args, &(__crc))); \
 }
 
+#define datachk_in_task(task_var, datachk_args ...) {\
+	int __temp_result_datachk_z = 0;\
+	uint32_t __crc = ~0; \
+	do_in_task(task_var, __temp_result_datachk_z = datachk(datachk_args, &(__crc))); \
+	assert_in_task(task_var, __temp_result_datachk_z == 0); \
+}
 
-
-#endif
+#endif /* PSTREE_ZDTMTST_WRAPPERS_H_ */
