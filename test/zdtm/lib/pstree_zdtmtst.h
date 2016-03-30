@@ -14,10 +14,9 @@
 #include <linux/limits.h>
 #include <stdarg.h>
 
-#include "pstree_zdtmtst_list.h"
-
 #define __CURRENT_TASK 0
 #define __NOT_CURRENT_TASK -2
+#define __MAX_CHILDREN_TASKS 100
 
 #define pstree_test_init(root_task_var, argc, argv) \
 	test_init(argc, argv); \
@@ -25,7 +24,8 @@
 	pid_t * __saved_root_task_var = &(root_task_var); \
 	size_t __futex_id_counter = 1 ;\
 	size_t __pstree_num_tasks = 0;\
-	__children_list_create; \
+	size_t __children_tasks_counter = 0; \
+	pid_t __children_tasks[__MAX_CHILDREN_TASKS]; \
 	task_waiter_t __task_waiter; \
 	task_waiter_init(&__task_waiter);
 
@@ -67,15 +67,15 @@
 
 #define FORK(task_var_parent, task_var_child) \
 	pid_t task_var_child = __NOT_CURRENT_TASK; \
-	__children_list_entry_create(task_var_child); \
 	if (task_var_parent == __CURRENT_TASK) { \
 		task_var_child = test_fork(); \
 		if (task_var_child == __CURRENT_TASK) { \
 			task_var_parent = __NOT_CURRENT_TASK; \
-			__children_list_clean; \
+			__children_tasks_counter = 0; \
 		} else {\
-			__children_list_add_entry(task_var_child); \
+			__assert(__children_tasks_counter < __MAX_CHILDREN_TASKS); \
 			__assert(task_var_child != -1); \
+			__children_tasks[__children_tasks_counter++] = task_var_child; \
 		}\
 	} \
 	__pstree_num_tasks++;
@@ -87,13 +87,14 @@
 		task_var_child = test_fork(); \
 		if (task_var_child == __CURRENT_TASK) { \
 			task_var_parent = __NOT_CURRENT_TASK; \
-			__children_list_clean; \
+			__children_tasks_counter = 0; \
 		} else {\
-			__children_list_add_entry(task_var_child); \
 			size_t i ; \
 			for(i = 0; i < __pstree_num_tasks  ; i++) \
 				task_waiter_complete(&__task_waiter, __futex_id_counter); \
+			__assert(__children_tasks_counter < __MAX_CHILDREN_TASKS); \
 			__assert(task_var_child != -1); \
+			__children_tasks[__children_tasks_counter++] = task_var_child; \
 		}\
 	} else { \
 		task_waiter_wait4(&__task_waiter, __futex_id_counter); \
@@ -102,10 +103,10 @@
 	__pstree_num_tasks++;
 
 #define __test_propagate_sig { \
-	struct __children_list_entry * ptr; \
 	int status; \
-	__children_list_for_each (ptr) { \
-		pid_t pid = *ptr->pid;\
+	size_t i; \
+	for ( i = 0; i < __children_tasks_counter; i++) { \
+		pid_t pid = __children_tasks[i]; \
 		kill(pid, SIGTERM);\
 		waitpid(pid, &status, 0); \
 		if (WIFEXITED(status)) { \
