@@ -30,14 +30,14 @@
 	task_waiter_t __tasks_sync_waiter; \
 	task_waiter_init(&__tasks_sync_waiter)
 
-#define do_in_task(task_var, operation) {\
-	if (task_var == __CURRENT_TASK)\
-		operation; \
-}
-
 #define __assert(assertion) { \
 	if (!(assertion)) \
 		pstree_test_fail(); \
+}
+
+#define do_in_task(task_var, operation) {\
+	if (task_var == __CURRENT_TASK)\
+		operation; \
 }
 
 #define do_in_task_sync(task_var, operation) { \
@@ -45,7 +45,8 @@
 		operation; \
 		size_t i; \
 		for (i = 0; i <  __pstree_tasks_count; i++) \
-			task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter); \
+			task_waiter_complete( \
+				&__tasks_sync_waiter, __sync_id_counter); \
 	} else { \
 		task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter); \
 	} \
@@ -78,9 +79,11 @@
 			task_var_parent = __NOT_CURRENT_TASK; \
 			__children_tasks_count = 0; \
 		} else {\
-			__assert(__children_tasks_count < __MAX_CHILDREN_TASKS); \
+			__assert(__children_tasks_count < \
+							__MAX_CHILDREN_TASKS); \
 			__assert(task_var_child != -1); \
-			__children_tasks[__children_tasks_count++] = task_var_child; \
+			__children_tasks[__children_tasks_count++] = \
+							task_var_child; \
 		} \
 	} \
 	 __pstree_tasks_count++
