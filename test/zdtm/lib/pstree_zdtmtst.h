@@ -15,28 +15,39 @@
 #include <limits.h>
 #include <stdarg.h>
 
+#include "zdtmtst.h"
+
 #define __CURRENT_TASK 0
 #define __NOT_CURRENT_TASK -2
 #define __MAX_CHILDREN_TASKS 100
 
+extern void pstree_test_init_sigaction(void);
+extern void pstree_test_kill_tree(void);
+
+extern pid_t __children_tasks[__MAX_CHILDREN_TASKS];
+extern size_t  __pstree_tasks_count;
+extern size_t __children_tasks_count;
+extern unsigned int  __sync_id_counter;
+extern task_waiter_t __tasks_sync_waiter;
+extern pid_t *__saved_root_task_var;
+
 #define pstree_test_init(root_task_var, argc, argv) \
 	test_init(argc, argv); \
+	pstree_test_init_sigaction(); \
 	pid_t root_task_var = __CURRENT_TASK; \
-	pid_t *__saved_root_task_var = &(root_task_var); \
-	unsigned int  __sync_id_counter = 1 ;\
-	size_t  __pstree_tasks_count = 0;\
-	size_t __children_tasks_count = 0; \
-	pid_t __children_tasks[__MAX_CHILDREN_TASKS]; \
-	task_waiter_t __tasks_sync_waiter; \
+	__pstree_tasks_count = 0; \
+	__children_tasks_count = 0; \
+	__sync_id_counter = 1; \
+	__saved_root_task_var = &(root_task_var); \
 	task_waiter_init(&__tasks_sync_waiter)
 
-#define __assert(assertion) { \
+#define pstree_test_check(assertion) { \
 	if (!(assertion)) \
 		pstree_test_fail(); \
 }
 
-#define do_in_task(task_var, operation) {\
-	if (task_var == __CURRENT_TASK)\
+#define do_in_task(task_var, operation) { \
+	if (task_var == __CURRENT_TASK) \
 		operation; \
 }
 
@@ -51,11 +62,12 @@
 		task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter); \
 	} \
 	__sync_id_counter++; \
-	__assert(__sync_id_counter < UINT32_MAX); \
+	pstree_test_check(__sync_id_counter < UINT32_MAX); \
 }
 
 #define pstree_test_fail() {  \
 	fail(); \
+	pstree_test_kill_tree();\
 	exit(1); \
 }
 
@@ -64,14 +76,10 @@
 	exit(0); \
 }
 
+#define pstree_test_check_in_task(task_var, assertion) \
+	do_in_task(task_var, pstree_test_check(assertion))
 
-#define assert_in_task(task_var, assertion) \
-	do_in_task(task_var, __assert(assertion))
-
-#define assert_in_task_sync(task_var, assertion) \
-	do_in_task_sync(task_var, __assert(assertion))
-
-#define fork_in_task(task_var_parent, task_var_child) \
+#define pstree_test_fork_in_task(task_var_parent, task_var_child) \
 	pid_t task_var_child = __NOT_CURRENT_TASK; \
 	if (task_var_parent == __CURRENT_TASK) { \
 		task_var_child = test_fork(); \
@@ -79,36 +87,24 @@
 			task_var_parent = __NOT_CURRENT_TASK; \
 			__children_tasks_count = 0; \
 		} else {\
-			__assert(__children_tasks_count < \
+			pstree_test_check(__children_tasks_count < \
 							__MAX_CHILDREN_TASKS); \
-			__assert(task_var_child != -1); \
+			pstree_test_check(task_var_child != -1); \
 			__children_tasks[__children_tasks_count++] = \
 							task_var_child; \
 		} \
 	} \
 	 __pstree_tasks_count++
 
-#define __test_propagate_sig() { \
-	int status; \
+#define pstree_test_cr_start() { \
+	do_in_task((*__saved_root_task_var), test_daemon()); \
+	test_waitsig(); \
 	size_t i; \
 	for (i = 0; i < __children_tasks_count; i++) { \
 		pid_t pid = __children_tasks[i]; \
-		kill(pid, SIGTERM);\
-		waitpid(pid, &status, 0); \
-		if (WIFEXITED(status)) { \
-			if (WEXITSTATUS(status)) \
-				pstree_test_fail(); \
-		} else { \
-			pstree_test_fail(); \
-		} \
+		if (!kill(pid, SIGTERM)) \
+			waitpid(pid, NULL, 0); \
 	} \
-}
-
-#define cr_start() { \
-	do_in_task((*__saved_root_task_var), test_daemon()); \
-	test_waitsig(); \
-	__test_propagate_sig(); \
 } \
 
 #endif /* PSTREE_ZDTMTST_H_ */
-

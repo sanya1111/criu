@@ -42,9 +42,9 @@ int main(int argc, char **argv)
 	void *root_mem = mmap_in_task(root, NULL, ROOT_MEM_SIZE,
 		PROT_WRITE | PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
-	fork_in_task(root, task1);
-	fork_in_task(root, task7);
-	fork_in_task(root, task11);
+	pstree_test_fork_in_task(root, task1);
+	pstree_test_fork_in_task(root, task7);
+	pstree_test_fork_in_task(root, task11);
 
 	munmap_in_task(root, root_mem, ROOT_MEM_SIZE);
 
@@ -68,8 +68,8 @@ int main(int argc, char **argv)
 		TASK1_MEM2_SIZE, TASK1_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task1, task2);
-	fork_in_task(task1, task6);
+	pstree_test_fork_in_task(task1, task2);
+	pstree_test_fork_in_task(task1, task6);
 	munmap_in_task(task1, root_mem, TASK1_MEM1_OFFSET);
 	munmap_in_task(task1, (root_mem +
 			(TASK1_MEM1_OFFSET + TASK1_MEM1_SIZE)),
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
 		TASK2_MEM2_SIZE, TASK2_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task2, task3);
+	pstree_test_fork_in_task(task2, task3);
 	/* TASK3 */
 	const size_t TASK3_MEM1_OFFSET = 0;
 	const size_t TASK3_MEM1_SIZE = PAGE_SIZE * 2;
@@ -144,7 +144,7 @@ int main(int argc, char **argv)
 		TASK3_MEM2_SIZE, TASK3_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task3, task4);
+	pstree_test_fork_in_task(task3, task4);
 	/* TASK4 */
 	const size_t TASK4_MEM1_OFFSET = PAGE_SIZE;
 	const size_t TASK4_MEM1_SIZE = PAGE_SIZE * 2;
@@ -166,7 +166,7 @@ int main(int argc, char **argv)
 		(task2_mem2 + TASK4_MEM2_OFFSET),
 		TASK4_MEM2_SIZE, TASK4_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
-	fork_in_task(task3, task5);
+	pstree_test_fork_in_task(task3, task5);
 	/* TASK 5 */
 	const size_t TASK5_MEM1_OFFSET = PAGE_SIZE;
 	const size_t TASK5_MEM1_SIZE = PAGE_SIZE * 2;
@@ -208,7 +208,7 @@ int main(int argc, char **argv)
 		TASK7_MEM2_SIZE, TASK7_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task7, task8);
+	pstree_test_fork_in_task(task7, task8);
 	/* TASK 8 */
 	const size_t TASK8_MEM1_OFFSET = 0;
 	const size_t TASK8_MEM1_SIZE = PAGE_SIZE * 2;
@@ -231,7 +231,7 @@ int main(int argc, char **argv)
 		TASK8_MEM2_SIZE, TASK8_MEM2_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task7, task9);
+	pstree_test_fork_in_task(task7, task9);
 	/* TASK 9 */
 	const size_t TASK9_MEM1_OFFSET = PAGE_SIZE * 6;
 	const size_t TASK9_MEM1_SIZE = PAGE_SIZE * 2;
@@ -243,7 +243,7 @@ int main(int argc, char **argv)
 		(task7_mem2 + TASK9_MEM1_OFFSET),
 		TASK9_MEM1_SIZE, TASK9_MEM1_SIZE, MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
-	fork_in_task(task7, task10);
+	pstree_test_fork_in_task(task7, task10);
 	/* TASK 10 */
 	const size_t TASK10_MEM1_OFFSET = PAGE_SIZE * 8;
 	const size_t TASK10_MEM1_SIZE = PAGE_SIZE * 2;
@@ -270,28 +270,26 @@ int main(int argc, char **argv)
 		MREMAP_MAYMOVE | MREMAP_FIXED,
 		tmp);
 
-	fork_in_task(task11, task12);
+	pstree_test_fork_in_task(task11, task12);
 	/*TASK12 */
 	char path[PATH_MAX];
 	int fd;
 	const size_t TASK12_MEM1_SIZE = PAGE_SIZE;
+	void *task12_mem1 = MAP_FAILED;
 
-	do_in_task(task12, snprintf(path, PATH_MAX,
-			"/proc/self/map_files/%lx-%lx",
-			(unsigned long) task11_mem1,
-			(unsigned long) task11_mem1 + TASK11_MEM1_SIZE));
+	do_in_task_sync(task12, {
+			snprintf(path, PATH_MAX,
+				"/proc/self/map_files/%lx-%lx",
+				(unsigned long) task11_mem1,
+				(unsigned long) task11_mem1 + TASK11_MEM1_SIZE);
+			fd = open(path, O_RDWR);
+			pstree_test_check(fd != -1);
+			task12_mem1 = mmap(NULL, TASK12_MEM1_SIZE,
+				PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+			close(fd);
+	});
 
-	do_in_task(task12, fd = open(path, O_RDWR));
-	assert_in_task(task12, fd != -1);
-
-	void *task12_mem1 = mmap_in_task(task12,
-			NULL,
-			TASK12_MEM1_SIZE,
-			PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-
-	do_in_task(task12, close(fd));
-
-	fork_in_task(task12, task13);
+	pstree_test_fork_in_task(task12, task13);
 
 	munmap_in_task(task12, task11_mem1, TASK11_MEM1_SIZE);
 	/* TASK13 */
@@ -320,7 +318,7 @@ int main(int argc, char **argv)
 
 	datagen_in_task(task13, task12_mem1, TASK12_MEM1_SIZE);
 	/* CRIU START */
-	cr_start();
+	pstree_test_cr_start();
 
 	/* DATACHK */
 	datachk_in_task(task4, task4_mem1, TASK4_MEM1_SIZE);
@@ -357,6 +355,5 @@ int main(int argc, char **argv)
 	datachk_in_task(task10, task7_mem1, TASK7_MEM1_SIZE);
 
 	datachk_in_task(task12, task12_mem1, TASK12_MEM1_SIZE);
-
 	pstree_test_pass();
 }
