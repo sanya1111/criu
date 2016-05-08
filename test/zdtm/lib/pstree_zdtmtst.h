@@ -39,10 +39,24 @@ bool __cr_runned;
 	__cr_runned = false; \
 	task_waiter_init(&__tasks_sync_waiter)
 
+#define pstree_test_fail() {  \
+	fail(); \
+	pstree_test_kill_children();\
+	exit(1); \
+}
+
+#define pstree_test_pass() { \
+	pstree_test_do_in_task(*__saved_root_task_var, pass()); \
+	exit(0); \
+}
+
 #define pstree_test_check(assertion) { \
 	if (!(assertion)) \
 		pstree_test_fail(); \
 }
+
+#define pstree_test_check_in_task(task_var, assertion) \
+	pstree_test_do_in_task(task_var, pstree_test_check(assertion))
 
 #define pstree_test_do_in_task(task_var, operation) { \
 	if (task_var == __CURRENT_TASK) \
@@ -65,20 +79,6 @@ bool __cr_runned;
 	__sync_id_counter++; \
 	pstree_test_check(__sync_id_counter < UINT32_MAX); \
 })
-
-#define pstree_test_fail() {  \
-	fail(); \
-	pstree_test_kill_children();\
-	exit(1); \
-}
-
-#define pstree_test_pass() { \
-	pstree_test_do_in_task(*__saved_root_task_var, pass()); \
-	exit(0); \
-}
-
-#define pstree_test_check_in_task(task_var, assertion) \
-	pstree_test_do_in_task(task_var, pstree_test_check(assertion))
 
 #define pstree_test_fork_in_task(task_var_parent, task_var_child) \
 	pid_t task_var_child = __NOT_CURRENT_TASK; \
