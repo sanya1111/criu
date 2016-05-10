@@ -2,10 +2,15 @@
 
 pid_t __children_tasks[__MAX_CHILDREN_TASKS];
 size_t __children_tasks_count;
+size_t __pstree_tasks_count;
+unsigned int  __sync_id_counter;
+task_waiter_t __tasks_sync_waiter;
+pid_t *__saved_root_task_var;
+bool __cr_runned;
 
 static void kill_children_and_exit(int exit_status)
 {
-	pstree_test_kill_children();
+	pstt_kill_children();
 	exit(exit_status);
 }
 
@@ -20,7 +25,7 @@ static void sigusr_handler(int sig)
 	kill_children_and_exit(1);
 }
 
-void pstree_test_kill_children(void)
+void pstt_kill_children(void)
 {
 	size_t i;
 
@@ -28,10 +33,10 @@ void pstree_test_kill_children(void)
 		kill(__children_tasks[i], SIGUSR2);
 }
 
-void pstree_test_init_sigaction(void)
+void pstt_init_sigaction(void)
 {
 	struct sigaction sa = {
-		.sa_sigaction = &sigchld_handler,
+		.sa_sigaction	= &sigchld_handler,
 		.sa_flags	= SA_SIGINFO | SA_RESTART,
 	};
 	if (sigaction(SIGCHLD, &sa, NULL)) {
