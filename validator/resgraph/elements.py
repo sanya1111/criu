@@ -6,9 +6,13 @@
 #      the fact that dump is incremental another that 
 # TODO print all addresses and flags in HEX
 
+import os
+import re
 from classfieldshelpers import *
 from criudumpreader import CriuDumpReader
 from errlist import ErrorList
+from collections import defaultdict
+from resgraph.functional_divider import extra_check, enable_extra
 
 class PsNode:
     def __init__(self, ps=None, parent=None):
@@ -143,7 +147,7 @@ class Process:
             errors_list.add_context(context)
             raw_trcore = reader.read_img(core_file_name, errors_list)
             if 'entries' in raw_trcore:
-                tread = Thread(tid, raw_trcore['entries'][0], errors_list)
+                tread = Thread(reader, tid, raw_trcore['entries'][0], errors_list)
                 self.threads.append(tread)
             else:
                 errors_list.add_error("no entries thread")
@@ -187,7 +191,7 @@ class Process:
 
 
 class Thread:
-    def __init__(self, pid, raw_trcore_info, errors_list):
+    def __init__(self, reader, pid, raw_trcore_info, errors_list):
         self.pid = pid
         self.mtype = None
         self.thread_info = None  # optional
@@ -210,13 +214,17 @@ class Thread:
 
             if 'ids' in raw_trcore_info:
                 errors_list.add_context("ids")
-                self.ids = Ids(raw_trcore_info['ids'], errors_list)
+                self.ids = Ids(None, None, raw_trcore_info['ids'], errors_list)
                 errors_list.pop_context()
 
             if 'thread_core' in raw_trcore_info:
                 errors_list.add_context("thread_core")
                 self.thread_core = ThreadCore(raw_trcore_info['thread_core'], errors_list)
                 errors_list.pop_context()
+        
+        if self.ids == None:
+            self.ids = Ids(reader, pid, None, errors_list)
+        
 
     def show_thread(self, indent_len=0):
         indent = " " * indent_len
@@ -596,7 +604,7 @@ class TC:
 
 
 class Ids:
-    def __init__(self, raw_ids_info, errors_list):
+    def __init__(self, reader, pid, raw_ids_info, errors_list):
         self.vm_id = None
         self.files_id = None
         self.fs_id = None
@@ -607,6 +615,18 @@ class Ids:
         self.uts_ns_id = None  # optional
         self.mnt_ns_id = None  # optional
         self.user_ns_id = None  # optional
+        
+        if pid != None:
+            assigned_ids_img = "ids-{}.img".format(pid)
+            errors_list.add_context("reading {0}".format(assigned_ids_img))
+            raw_ids_info = reader.read_img(assigned_ids_img, errors_list)
+            if not "magic" in raw_ids_info or raw_ids_info.get("magic") != "IDS":
+                errors_list.add_error("bad magic")
+            elif not "entries" in raw_ids_info:
+                errors_list.add("no entries")
+            else:
+                raw_ids_info = raw_ids_info["entries"][0] 
+            errors_list.pop_context()
 
         init_items_list = ['vm_id', 'files_id', 'fs_id', 'sighand_id']
         init_items(self, init_items_list, raw_ids_info, errors_list)
@@ -614,6 +634,8 @@ class Ids:
         init_optional_items_list = ['pid_ns_id', 'net_ns_id', 'ipc_ns_id',
                                     'uts_ns_id', 'mnt_ns_id', 'user_ns_id']
         init_optional_items(self, init_optional_items_list, raw_ids_info, errors_list)
+        
+        
 
     def show_ids(self, indent_len=0):
         indent = " " * indent_len
@@ -624,6 +646,7 @@ class Ids:
         print_optional_items_list = ['pid_ns_id', 'net_ns_id', 'ipc_ns_id',
                                      'uts_ns_id', 'mnt_ns_id', 'user_ns_id']
         print_optional_items(self, print_optional_items_list, indent)
+     
 
 
 class Sas:
@@ -849,3 +872,423 @@ class PageMap:
         for i in range(len(self.pmap_entryes)):
             print "\n{0}Page map #{1}:".format(indent, i)
             self.pmap_entryes[i].show_pmentry(indent_len + 2)
+
+
+class Inventory:
+    def __init__(self, reader, errors_list):
+        self.__inventory_image_name = "inventory.img"
+        
+        self.img_version = None
+        self.fdinfo_per_id = None #optional than
+        self.root_ids  = None;
+        self.ns_per_id  = None;
+        self.root_cg_set = None;
+        self.lsmtype = None;
+        errors_list.add_context("inventory reading")
+        
+        raw_data = reader.read_img(self.__inventory_image_name, errors_list)
+        if "magic" in raw_data and raw_data.get("magic") == "INVENTORY":
+            if 'entries' in raw_data:
+                init_items_list = ['img_version']
+                init_items(self, init_items_list, raw_data['entries'][0], errors_list)
+        
+                init_optional_items_list = ['fdinfo_per_id', 'root_ids', 'ns_per_id', 'root_cg_set', 'lsmtype'];
+                init_optional_items(self, init_optional_items_list, raw_data['entries'][0], errors_list)
+            else:
+                errors_list.add_error("no entries found")
+        else:
+            errors_list.add_error("WRONG MAGIC")
+
+        errors_list.pop_context()
+        
+class FdInfoEntry:
+    def __init__(self, raw_data, errors_list):
+        self.id = None
+        self.flags = None
+        self.type = None
+        self.fd = None
+        init_items_list = ['id', 'flags', 'type', 'fd']
+        init_items(self, init_items_list, raw_data, errors_list)
+    
+    def __str__(self):
+        return "Fdinfo : id = {0}, flags = {1}, type = {2}, fd = {3}".format(self.id, self.flags, self.type, self.fd)
+        
+class FdinfoList:
+    def __init__(self, img, reader, errors_list):
+        self.entries = []
+        errors_list.add_context('loading fdinfo image {0}'.format(img))
+        raw_data = reader.read_img(img, errors_list, False)
+        if raw_data == {}:
+            return
+        if "magic" in raw_data and raw_data.get("magic") == "FDINFO":
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    errors_list.add_context("trying to load entry {}".format(entry))
+                    self.entries.append(FdInfoEntry(entry, errors_list))
+                    errors_list.pop_context()
+            else:
+                errors_list.add_error("no entries found")
+        else:
+            errors_list.add_error("WRONG MAGIC")
+        errors_list.pop_context()
+        
+    def __iter__(self):
+        for item in self.entries:
+            yield item
+        
+class FdInfoDict:
+    @extra_check
+    def check_no_other_fdinfo_images_exists(self, reader, errors_list):
+        for file in os.listdir(reader.dir_img_path):
+            if os.path.isfile(os.path.join(reader.dir_img_path, file)):
+                m = re.match("^fdinfo-(\d+).img$", file)
+                if m != None:
+                    if not self.dict.has_key(int(m.group(1))):
+                        errors_list.add_error("unused {} image".format(file))
+                
+    def __init__(self, inventory, processes, reader, errors_list):
+        errors_list.add_context("initing fdinfo dictionary")
+        self.dict = {}
+        if inventory.fdinfo_per_id:
+            for task in processes.process_list:
+                for thread in task.threads:
+                    if thread.ids != None:
+                        file_id = thread.ids.files_id
+                        if not file_id in self.dict:
+                            self.dict[file_id] = FdinfoList("fdinfo-{}.img".format(file_id), reader, errors_list)
+        else:
+            #TODO under the question, what we should do in this case, in the first view inventory.fdinfo_per_id is always true
+            pass
+        
+        self.check_no_other_fdinfo_images_exists(reader, errors_list)
+        errors_list.pop_context()
+                            
+    def __iter__(self):
+        for item in self.dict.items():
+            yield item
+            
+class RegFileEntry:
+    def __init__(self, raw_data, errors_list):
+        self.id = None
+        self.flags = None
+        self.pos = None
+        self.fown= None
+        self.name = None
+        
+        
+        init_items_list = ['id', 'flags', 'pos', 'fown', 'name']
+        init_items(self, init_items_list, raw_data, errors_list)
+        
+        self.mnt_id = None
+        self.size = None
+        self.ext = None
+        
+        init_optional_items_list = ['mnt_id', 'size', 'ext'];
+        init_optional_items(self, init_optional_items_list, raw_data, errors_list)
+    
+    def __str__(self):
+        return "RegFileEntry : id = {0}, flags = {1}, pos = {2}, fown = {3}, name={4}, mnt_id={5},size={6}, ext={7}".format(
+                self.id, self.flags, self.pos, self.fown, self.name, self.mnt_id, self.size, self.ext)
+    
+            
+class RegFilesList:
+    def __init__(self, reader, errors_list):
+        self.list = []
+        reg_img = "reg-files.img"
+        
+        errors_list.add_context("reading regfiles image")
+        raw_data =  reader.read_img(reg_img, errors_list)
+        if "magic" in raw_data and raw_data.get("magic") == "REG_FILES":
+            if 'entries' in raw_data:
+                for entry in raw_data['entries']:
+                    self.list.append(RegFileEntry(entry, errors_list))
+            else:
+                errors_list.add_error("no entries found")
+        else:
+            errors_list.add_error("WRONG MAGIC")
+        errors_list.pop_context()
+    
+    def __iter__(self):
+        for item in self.list:
+            yield item
+        
+class MntPointEntry:
+    @extra_check
+    def __init__(self, raw_data, errors_list):
+        self.fstype = None
+        self.mnt_id = None
+        self.root_dev = None
+        self.parent_mnt_id = None
+        self.flags = None
+        self.root = None
+        self.mountpoint = None
+        self.source = None
+        self.options = None
+        init_items_list = ['fstype', 'mnt_id', 'root_dev', 'parent_mnt_id', 'flags', 'root', 'mountpoint', 'source', 'options']
+        init_items(self, init_items_list, raw_data, errors_list)
+        
+        self.shared_id = None
+        self.master_id = None
+        self.with_plugin = None
+        self.ext_mount = None
+        self.fsname = None
+        self.internal_sharing = None
+        self.deleted = None
+        self.sb_flags = None
+        init_optional_items_list = ['shared_id', 'master_id', 'with_plugin', 'ext_mount', 'fsname', 'internal_sharing', 'deleted', 'sb_flags']
+        init_optional_items(self, init_optional_items_list, raw_data, errors_list)
+        
+class MntPointList:
+    @extra_check
+    def __init__(self, id, reader, errors_list):
+        self.items = []
+        
+        img_name = "mountpoints-{}.img".format(id)
+        
+        errors_list.add_context("loading mntpoint list")
+        raw_data = reader.read_img(img_name, errors_list)
+        if "magic" in raw_data and raw_data.get("magic") == "MNTS":
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    errors_list.add_context("trying to load entry {}".format(entry))
+                    self.items.append(MntPointEntry(entry, errors_list))
+                    errors_list.pop_context()
+            else:
+                errors_list.add_error("no entries found")
+        else:
+            errors_list.add_error("WRONG MAGIC")
+        errors_list.pop_context()
+        
+    def __iter__(self):
+        for item in self.items:
+            yield item
+            
+class MntPointDict():
+    def check_no_other_fdinfo_images_exists(self, reader, errors_list):
+        for file in os.listdir(reader.dir_img_path):
+            if os.path.isfile(os.path.join(reader.dir_img_path, file)):
+                m = re.match("^mountpoints-(\d+).img$", file)
+                if m != None:
+                    if not self.dict.has_key(int(m.group(1))):
+                        errors_list.add_error("unused {} image".format(file))
+                        
+    def do_init(self, parent_mnt_nsid, node, reader, errors_list):
+        mnt_nsid = node.process.threads[0].ids.mnt_ns_id
+        if mnt_nsid != None:
+            if mnt_nsid != parent_mnt_nsid and not mnt_nsid in self.dict:
+                self.dict[mnt_nsid] = MntPointList(mnt_nsid, reader, errors_list) 
+            for child in node.children: 
+                self.do_init(mnt_nsid, child, reader, errors_list)
+       
+    @extra_check     
+    def __init__(self, inventory, pstree, reader, errors_list):
+        self.dict = {}
+        errors_list.add_context("loading mntpoint dict")
+        if inventory.ns_per_id and inventory.root_ids != None:
+            self.do_init(inventory.root_ids["mnt_ns_id"], pstree.root, reader, errors_list)
+        else:
+            pass
+        
+        self.check_no_other_fdinfo_images_exists(reader, errors_list)
+        errors_list.pop_context()
+        
+    def __iter__(self):
+        for item in self.dict.items():
+            yield item
+    
+class PipesDataEntry:
+    def __init__(self, raw_data, errors):
+        self.pipe_id = None
+        self.bytes = None
+        
+        self.size = None
+        self.extra = None
+        
+        errors.add_context("trying to load new pipes_data_entry")
+        init_items_list = ['pipe_id', 'bytes']
+        init_items(self, init_items_list, raw_data, errors)
+        
+        init_optional_items_list = ['size', 'extra']
+        init_optional_items(self, init_optional_items_list, raw_data, errors)
+        
+        errors.pop_context()
+        
+class PipesDataList:
+    def __init__(self, reader, errors, fifo=False):
+        self.items = []
+        
+        img = None
+        magic = None
+        if fifo:
+            img = 'fifo-data.img'
+            magic = 'FIFO_DATA'
+        else:
+            img = 'pipes-data.img'
+            magic = 'PIPES_DATA'
+        errors.add_context("loading pipes_data list")
+        raw_data = reader.read_img(img, errors)
+        if "magic" in raw_data and raw_data.get("magic") == magic:
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    self.items.append(PipesDataEntry(entry, errors))
+            else:
+                errors.add_error("no entries found")
+        else:
+            errors.add_error("WRONG MAGIC")
+        errors.pop_context()
+        
+    def __iter__(self):
+        for item in self.items:
+            yield item
+            
+class PipesEntry:
+    def __init__(self, raw_data, errors):
+        self.id = None
+        self.pipe_id = None;
+        self.flags = None
+        self.fown = None
+        
+        errors.add_context("loading pipes entry")
+        init_items_list = ['id', 'pipe_id', 'flags', 'fown']
+        init_items(self, init_items_list, raw_data, errors)
+        errors.pop_context()
+        
+class PipesList:
+    def __init__(self, reader, errors):
+        self.items = []
+        
+        img = 'pipes.img'
+        errors.add_context("loading pipes list")
+        raw_data = reader.read_img(img, errors)
+        if "magic" in raw_data and raw_data.get("magic") == "PIPES":
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    self.items.append(PipesEntry(entry, errors))
+            else:
+                errors.add_error("no entries found")
+        else:
+            errors.add_error("WRONG MAGIC")
+        errors.pop_context()
+        
+    def __iter__(self):
+        for item in self.items:
+            yield item
+            
+class FifoEntry:
+    def __init__(self, raw_data, errors):
+        self.id = None
+        self.pipe_id = None;
+        
+        errors.add_context("loading fifo entry")
+        init_items_list = ['id', 'pipe_id']
+        init_items(self, init_items_list, raw_data, errors)
+        errors.pop_context()
+        
+class FifoList:
+    def __init__(self, reader, errors):
+        self.items = []
+        
+        img = 'fifo.img'
+        errors.add_context("loading fifos list")
+        raw_data = reader.read_img(img, errors)
+        if "magic" in raw_data and raw_data.get("magic") == "FIFO":
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    self.items.append(FifoEntry(entry, errors))
+            else:
+                errors.add_error("no entries found")
+        else:
+            errors.add_error("WRONG MAGIC")
+        errors.pop_context()
+        
+    def __iter__(self):
+        for item in self.items:
+            yield item
+            
+class InetskEntry:
+    '''
+    required uint32            id        =  1;
+    required uint32            ino        =  2;
+    required uint32            family        =  3;
+    required uint32            type        =  4;
+    required uint32            proto        =  5;
+    required uint32            state        =  6;
+    required uint32            src_port    =  7;
+    required uint32            dst_port    =  8;
+    required uint32            flags        =  9 [(criu).hex = true];
+    required uint32            backlog        = 10;
+
+    repeated uint32            src_addr    = 11 [(criu).ipadd = true];
+    repeated uint32            dst_addr    = 12 [(criu).ipadd = true];
+
+    required fown_entry        fown        = 13;
+    required sk_opts_entry        opts        = 14;
+    
+    
+    optional bool            v6only        = 15;
+    optional ip_opts_entry        ip_opts        = 16;
+
+    /* for ipv6, we need to send the ifindex to bind(); we keep the ifname
+     * here and convert it on restore */
+    optional string            ifname        = 17;
+    '''
+    def __init__(self, raw_data, errors):
+        self.id = None
+        self.ino = None;
+        self.family = None
+        self.type = None
+        self.proto = None
+        self.state = None
+        self.src_port = None
+        self.dst_port = None
+        self.flags = None
+        self.backlog = None
+        self.src_addr = None
+        self.dst_addr = None
+        self.fown = None
+        self.opts = None
+        
+        self.v6only = None
+        self.ip_opts = None
+        self.ifname = None
+        
+        
+        
+        errors.add_context("loading inetsk entry")
+        init_items_list = ['id', 'ino', 'family', 'type', 'proto', 'state', 'src_port', 'dst_port', \
+                           'flags', 'backlog', 'src_addr', 'dst_addr', 'fown', 'opts']
+        init_items(self, init_items_list, raw_data, errors)
+        
+        init_optional_items_list = ['v6only', 'ip_opts', 'ifname']
+        init_optional_items(self, init_optional_items_list, raw_data, errors)
+        errors.pop_context()
+        
+class InetskList:
+    def __init__(self, reader, errors):
+        self.items = []
+        
+        img = 'inetsk.img'
+        errors.add_context("loading inetssk list")
+        raw_data = reader.read_img(img, errors)
+        if "magic" in raw_data and raw_data.get("magic") == "INETSK":
+            if 'entries' in raw_data:
+                for entry in raw_data["entries"]:
+                    self.items.append(InetskEntry(entry, errors))
+            else:
+                errors.add_error("no entries found")
+        else:
+            errors.add_error("WRONG MAGIC")
+        errors.pop_context()
+        
+    def __iter__(self):
+        for item in self.items:
+            yield item       
+
+
+        
+class Resources:
+    def __init__(self):
+        self.regfiles = None
+        self.mntpoints = None
+        self.pipes = None
+        self.fifos = None
