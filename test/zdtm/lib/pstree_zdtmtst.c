@@ -1,3 +1,4 @@
+#include "zdtmtst.h"
 #include "pstree_zdtmtst.h"
 
 pid_t __children_tasks[__MAX_CHILDREN_TASKS];
@@ -7,6 +8,14 @@ unsigned int  __sync_id_counter;
 task_waiter_t __tasks_sync_waiter;
 pid_t *__saved_root_task_var;
 bool __cr_runned;
+
+void pstt_kill_children(void)
+{
+	size_t i;
+
+	for (i = 0; i < __children_tasks_count; i++)
+		kill(__children_tasks[i], SIGUSR2);
+}
 
 static void kill_children_and_exit(int exit_status)
 {
@@ -25,15 +34,7 @@ static void sigusr_handler(int sig)
 	kill_children_and_exit(1);
 }
 
-void pstt_kill_children(void)
-{
-	size_t i;
-
-	for (i = 0; i < __children_tasks_count; i++)
-		kill(__children_tasks[i], SIGUSR2);
-}
-
-void pstt_init_sigaction(void)
+void __pstt_init_sigaction(void)
 {
 	struct sigaction sa = {
 		.sa_sigaction	= &sigchld_handler,
@@ -44,4 +45,12 @@ void pstt_init_sigaction(void)
 		kill_children_and_exit(1);
 	}
 	signal(SIGUSR2, sigusr_handler);
+}
+
+void __pstt_fail(const char *func_name, size_t line, const char *msg)
+{
+	test_msg("%s:%u %s\n", func_name, line, msg);
+	fail();
+	pstt_kill_children();
+	exit(1);
 }

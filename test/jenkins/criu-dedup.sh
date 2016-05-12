@@ -9,3 +9,4 @@ prep
 # with delays petween iterations
 ./test/zdtm.py run -t zdtm/transition/maps007 --keep-going --report report -f h --pre 8:.1 --dedup || fail
 ./test/zdtm.py run -t zdtm/static/mem-touch   --keep-going --report report -f h --pre 8:.1 --dedup || fail
+./test/zdtm.py run -t zdtm/static/maps06   --keep-going --report report -f h --pre 8:.1 --dedup || fail
