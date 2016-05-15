@@ -84,7 +84,7 @@ extern bool __cr_runned;
 	pid_t root_task_var = __CURRENT_TASK; \
 	test_init(argc, argv); \
 	__pstt_init_sigaction(); \
-	__pstree_tasks_count = 0; \
+	__pstree_tasks_count = 1; \
 	__children_tasks_count = 0; \
 	__sync_id_counter = 1; \
 	__saved_root_task_var = &(root_task_var); \
