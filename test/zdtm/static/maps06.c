@@ -250,23 +250,6 @@ int main(int argc, char **argv)
 	pstt_fork_in_task(task11, task12);
 
 	/* task12 */
-	char path[PATH_MAX];
-	int fd;
-	const size_t TASK12_MEM1_SIZE = PAGE_SIZE * 2;
-	void *task12_mem1 = MAP_FAILED;
-
-	pstt_do_in_task_sync(task12, {
-		snprintf(path, PATH_MAX,
-				"/proc/self/map_files/%lx-%lx",
-				(unsigned long) task11_mem1,
-				(unsigned long) task11_mem1 + TASK11_MEM1_SIZE);
-		fd = open(path, O_RDWR);
-		pstt_check(fd != -1);
-		task12_mem1 = mmap(NULL, TASK12_MEM1_SIZE,
-				PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-		close(fd);
-	});
-
 	pstt_fork_in_task(task12, task13);
 
 	pstt_munmap_in_task(task12, task11_mem1, TASK11_MEM1_SIZE);
@@ -293,8 +276,6 @@ int main(int argc, char **argv)
 	pstt_datagen_in_task(task5, task3_mem1, TASK3_MEM1_SIZE);
 
 	pstt_datagen_in_task(task13, task13_mem1, TASK13_MEM1_SIZE);
-
-	pstt_datagen_in_task(task13, task12_mem1, TASK12_MEM1_SIZE);
 
 	/* Checkpoint, restore */
 	pstt_cr_start();
@@ -333,6 +314,5 @@ int main(int argc, char **argv)
 	pstt_datachk_in_task(task9, task7_mem1, TASK7_MEM1_SIZE);
 	pstt_datachk_in_task(task10, task7_mem1, TASK7_MEM1_SIZE);
 
-	pstt_datachk_in_task(task12, task12_mem1, TASK12_MEM1_SIZE);
 	pstt_pass();
 }
