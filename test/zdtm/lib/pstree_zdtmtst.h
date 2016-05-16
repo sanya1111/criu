@@ -111,7 +111,7 @@ extern bool __cr_runned;
 		operation; \
 } while(0)
 
-#define pstt_do_in_task_sync(task_var, operation) do { \
+#define __pstt_do_in_task_sync(task_var, operation) do { \
 	pstt_check(!__cr_runned); \
 	if (task_var == __CURRENT_TASK) { \
 		operation; \
@@ -128,14 +128,20 @@ extern bool __cr_runned;
 #define pstt_barrier() do { \
 	task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter); \
 	__sync_id_counter++; \
-	pstt_do_in_task_sync((*__saved_root_task_var), { \
+	__pstt_do_in_task_sync((*__saved_root_task_var), { \
 		size_t i = 0; \
 		for (i = 0; i < __pstree_tasks_count; i++) \
 			task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter - 1); \
 	}); \
 } while(0)
 
+#define pstt_do_in_task_sync(task_var, operation) do { \
+	pstt_barrier(); \
+	__pstt_do_in_task_sync(task_var, operation); \
+} while(0)
+
 #define pstt_fork_in_task(task_var_parent, task_var_child) \
+	pstt_barrier(); \
 	pid_t task_var_child = __NOT_CURRENT_TASK; \
 	if (task_var_parent == __CURRENT_TASK) { \
 		task_var_child = test_fork(); \
