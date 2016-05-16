@@ -59,7 +59,11 @@ int main(int argc, char **argv)
 	pstt_fork_in_task(task1, task2);
 	pstt_fork_in_task(task1, task6);
 
-	pstt_munmap_in_task(task1, root_mem, TASK1_MEM2_OFFSET);
+	pstt_munmap_in_task(task1, root_mem, TASK1_MEM1_OFFSET);
+	pstt_munmap_in_task(task1, (root_mem +
+			(TASK1_MEM1_OFFSET + TASK1_MEM1_SIZE)),
+			(TASK1_MEM2_OFFSET -
+			(TASK1_MEM1_OFFSET + TASK1_MEM1_SIZE)));
 
 	/* task6 */
 	const size_t TASK6_MEM1_OFFSET = PAGE_SIZE * 2;
