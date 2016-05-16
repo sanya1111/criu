@@ -125,6 +125,16 @@ extern bool __cr_runned;
 	pstt_check(__sync_id_counter < UINT32_MAX); \
 } while(0)
 
+#define pstt_barrier() do { \
+	task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter); \
+	__sync_id_counter++; \
+	pstt_do_in_task_sync((*__saved_root_task_var), { \
+		size_t i = 0; \
+		for (i = 0; i < __pstree_tasks_count; i++) \
+			task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter - 1); \
+	}); \
+} while(0)
+
 #define pstt_fork_in_task(task_var_parent, task_var_child) \
 	pid_t task_var_child = __NOT_CURRENT_TASK; \
 	if (task_var_parent == __CURRENT_TASK) { \
@@ -146,6 +156,7 @@ extern bool __cr_runned;
  * because ps tree processes don't run simultaneously after C/R.
  */
 #define pstt_cr_start() do { \
+	pstt_barrier(); \
 	pstt_do_in_task((*__saved_root_task_var), test_daemon()); \
 	test_waitsig(); \
 	__cr_runned = true; \
