@@ -126,13 +126,18 @@ extern bool __cr_runned;
 } while(0)
 
 #define pstt_barrier() do { \
-	task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter); \
 	__sync_id_counter++; \
-	__pstt_do_in_task_sync((*__saved_root_task_var), { \
+	task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter - 1); \
+	pstt_do_in_task((*__saved_root_task_var), { \
 		size_t i = 0; \
 		for (i = 0; i < __pstree_tasks_count; i++) \
 			task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter - 1); \
+		for (i = 0; i < __pstree_tasks_count - 1; i++)	\
+			task_waiter_complete(&__tasks_sync_waiter, __sync_id_counter); \
 	}); \
+	pstt_do_in_task(!(*__saved_root_task_var),  \
+			task_waiter_wait4(&__tasks_sync_waiter, __sync_id_counter)); \
+	__sync_id_counter++; \
 } while(0)
 
 #define pstt_do_in_task_sync(task_var, operation) do { \
